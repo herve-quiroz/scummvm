@@ -19,8 +19,8 @@
  *
  */
 
-#ifndef MM_XEEN_SCREENSHOT_HARNESS_H
-#define MM_XEEN_SCREENSHOT_HARNESS_H
+#ifndef XEEN_SCREENSHOT_HARNESS_H
+#define XEEN_SCREENSHOT_HARNESS_H
 
 #include "common/path.h"
 #include "common/scummsys.h"
