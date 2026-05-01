@@ -150,14 +150,16 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	vm->_party->_mazeDirection = s.facing;
 	vm->_party->_priorMazeId = s.mazeId;
 
-	// Load the requested map. If the underlying data files are missing this
-	// will warning() and abort via error() inside Map::load — we cannot
-	// recover from that gracefully, but the user will see the failure on
-	// stderr and the process will exit non-zero, which satisfies the spec.
+	// Load the requested map. Missing data files still abort via error()
+	// inside Map::load. We can't recover from that, but the user sees the
+	// failure on stderr and the process exits non-zero, which the spec
+	// allows.
 	vm->_map->load(s.mazeId);
 
-	// Verify Map::load actually loaded the requested maze. If the requested
-	// mazeId is invalid, _mazeData[0]._mazeId will not equal s.mazeId.
+	// Verify Map::load picked up the requested maze. This catches the
+	// "file present but mismatched maze ID" case (e.g. requesting maze 99
+	// on the wrong side); a fully-missing data file would have aborted
+	// inside Map::load above.
 	if (vm->_map->mazeData()._mazeId != s.mazeId) {
 		warning("Screenshot harness: maze %u failed to load (loaded id=%d)",
 			s.mazeId, vm->_map->mazeData()._mazeId);
@@ -201,6 +203,9 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	if (!Image::writePNG(out, vm->_screen->rawSurface(), palette)) {
 		warning("Screenshot harness: writePNG failed for '%s'",
 			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		out.close();
+		// Caller must check exit status; the partial PNG may be left on
+		// disk but the non-zero exit signals it should not be trusted.
 		return 1;
 	}
 
