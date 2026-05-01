@@ -22,20 +22,8 @@
 #include "mm/xeen/screenshot_harness.h"
 
 #include "common/config-manager.h"
-#include "common/file.h"
 #include "common/str.h"
-#include "common/system.h"
-#include "common/textconsole.h"
-#include "graphics/paletteman.h"
-#include "image/png.h"
-#include "mm/xeen/files.h"
-#include "mm/xeen/interface.h"
-#include "mm/xeen/map.h"
 #include "mm/xeen/party.h"
-#include "mm/xeen/saves.h"
-#include "mm/xeen/screen.h"
-#include "mm/xeen/window.h"
-#include "mm/xeen/xeen.h"
 
 namespace MM {
 namespace Xeen {
