@@ -22,8 +22,20 @@
 #include "mm/xeen/screenshot_harness.h"
 
 #include "common/config-manager.h"
+#include "common/file.h"
 #include "common/str.h"
+#include "common/system.h"
+#include "common/textconsole.h"
+#include "graphics/paletteman.h"
+#include "image/png.h"
+#include "mm/xeen/files.h"
+#include "mm/xeen/interface.h"
+#include "mm/xeen/map.h"
 #include "mm/xeen/party.h"
+#include "mm/xeen/saves.h"
+#include "mm/xeen/screen.h"
+#include "mm/xeen/window.h"
+#include "mm/xeen/xeen.h"
 
 namespace MM {
 namespace Xeen {
@@ -100,8 +112,104 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 }
 
 int ScreenshotHarness::run(XeenEngine *vm) {
-	// Implemented in Task 4.
-	(void)vm;
+	Settings s;
+	Common::String err;
+	if (!parseSettings(s, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		return 1;
+	}
+
+	// Refuse to run on anything other than World of Xeen — the spec only
+	// targets WoX, and Clouds/DarkSide alone might not have both archives.
+	if (vm->getGameID() != GType_WorldOfXeen) {
+		warning("Screenshot harness: target must be World of Xeen (got gameID=%u)",
+			vm->getGameID());
+		return 1;
+	}
+
+	// --- bootstrap (mirrors XeenEngine::playGame() + play() up to gameLoop) ---
+	vm->_files->setGameCc(0);
+	vm->_sound->stopAllAudio();
+	SpriteResource::setClippedBottom(140);
+
+	vm->_interface->setup();
+	vm->_screen->loadBackground("back.raw");
+	vm->_screen->loadPalette("mm4.pal");
+
+	// Initialise save archives + default party so _files->_currentSave is
+	// non-null and the active party is populated. This loads the on-disk
+	// MAZE.PTY which sets _party->_mazeId/_mazePosition/_mazeDirection — we
+	// override these immediately below.
+	vm->_saves->newGame();
+
+	// Honour the requested side and maze.
+	vm->_map->clearMaze();
+	vm->_map->_loadCcNum = s.side;
+	vm->_party->_mazeId = s.mazeId;
+	vm->_party->_mazePosition = Common::Point(s.cellX, s.cellY);
+	vm->_party->_mazeDirection = s.facing;
+	vm->_party->_priorMazeId = s.mazeId;
+
+	// Load the requested map. If the underlying data files are missing this
+	// will warning() and abort via error() inside Map::load — we cannot
+	// recover from that gracefully, but the user will see the failure on
+	// stderr and the process will exit non-zero, which satisfies the spec.
+	vm->_map->load(s.mazeId);
+
+	// Verify Map::load actually loaded the requested maze. If the requested
+	// mazeId is invalid, _mazeData[0]._mazeId will not equal s.mazeId.
+	if (vm->_map->mazeData()._mazeId != s.mazeId) {
+		warning("Screenshot harness: maze %u failed to load (loaded id=%d)",
+			s.mazeId, vm->_map->mazeData()._mazeId);
+		return 1;
+	}
+
+	// Re-apply the requested position — Map::load can mutate party state
+	// (e.g. wrap-around or fall-through cells). We want exactly the cell
+	// the caller asked for.
+	vm->_party->_mazePosition = Common::Point(s.cellX, s.cellY);
+	vm->_party->_mazeDirection = s.facing;
+
+	// Run the same first-frame setup that XeenEngine::play() runs.
+	vm->_mode = MODE_INTERACTIVE;
+	vm->_interface->startup();
+	(*vm->_windows)[0].update();
+	vm->_interface->mainIconsPrint();
+	(*vm->_windows)[0].update();
+
+	// Apply the palette (engine-style fade) so the SDL backend has the live
+	// palette when we grab it for the PNG.
+	vm->_screen->fadeIn();
+
+	// Re-draw scene + HUD now that the palette is live, so the captured
+	// surface matches what a player would see at this position.
+	vm->_interface->draw3d(true, false);
+	vm->_interface->mainIconsPrint();
+	(*vm->_windows)[0].update();
+
+	// --- save the frame ---
+	Common::DumpFile out;
+	if (!out.open(s.screenshotPath)) {
+		warning("Screenshot harness: cannot open '%s' for writing",
+			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		return 1;
+	}
+
+	byte palette[256 * 3];
+	g_system->getPaletteManager()->grabPalette(palette, 0, 256);
+
+	if (!Image::writePNG(out, vm->_screen->rawSurface(), palette)) {
+		warning("Screenshot harness: writePNG failed for '%s'",
+			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		return 1;
+	}
+
+	out.close();
+	debug("Screenshot harness: wrote %s",
+		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+
+	// Cause outerGameLoop to exit cleanly.
+	vm->_gameMode = GMODE_QUIT;
 	return 0;
 }
 
