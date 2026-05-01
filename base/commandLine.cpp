@@ -1083,8 +1083,8 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("mm-cell")
-				// Parse "X,Y" into mm_cell_x and mm_cell_y; we keep the raw value
-				// in settings as well so the engine can re-validate.
+				// Split "X,Y" into separate mm-cell-x / mm-cell-y settings; the
+				// engine reads those keys when validating the harness invocation.
 				Common::StringTokenizer tokenizer(option, ",");
 				if (tokenizer.empty())
 					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
@@ -1092,6 +1092,16 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 				if (tokenizer.empty())
 					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
 				Common::String ys = tokenizer.nextToken();
+				if (xs.empty() || ys.empty())
+					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+				for (uint i = 0; i < xs.size(); ++i) {
+					if (!Common::isDigit(xs[i]))
+						usage("Invalid --mm-cell X value: %s (must be a non-negative integer)", xs.c_str());
+				}
+				for (uint i = 0; i < ys.size(); ++i) {
+					if (!Common::isDigit(ys[i]))
+						usage("Invalid --mm-cell Y value: %s (must be a non-negative integer)", ys.c_str());
+				}
 				settings["mm-cell-x"] = xs;
 				settings["mm-cell-y"] = ys;
 				settings.erase("mm-cell");
