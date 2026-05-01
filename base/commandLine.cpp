@@ -160,6 +160,12 @@ static const char HELP_STRING4[] =
 	"  -d, --debuglevel=NUM     Set debug verbosity level\n"
 	"  --debugflags=FLAGS       Enable engine specific debug flags\n"
 	"                           (separated by commas)\n"
+	"  --mm-screenshot=PATH     [MM/Xeen] Render one in-game frame to PATH and exit.\n"
+	"                           Requires --mm-maze, --mm-cell, --mm-facing.\n"
+	"  --mm-maze=N              [MM/Xeen] Maze ID for the harness frame (1-128).\n"
+	"  --mm-cell=X,Y            [MM/Xeen] Party cell coordinates (each 0-15).\n"
+	"  --mm-facing=N|E|S|W      [MM/Xeen] Party facing direction.\n"
+	"  --mm-side=0|1            [MM/Xeen] World of Xeen side (0=Clouds default, 1=Dark).\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1069,6 +1075,33 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			DO_LONG_OPTION("start-movie")
 			END_OPTION
 #endif
+
+			DO_LONG_OPTION_PATH("mm-screenshot")
+			END_OPTION
+
+			DO_LONG_OPTION_INT("mm-maze")
+			END_OPTION
+
+			DO_LONG_OPTION("mm-cell")
+				// Parse "X,Y" into mm_cell_x and mm_cell_y; we keep the raw value
+				// in settings as well so the engine can re-validate.
+				Common::StringTokenizer tokenizer(option, ",");
+				if (tokenizer.empty())
+					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+				Common::String xs = tokenizer.nextToken();
+				if (tokenizer.empty())
+					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+				Common::String ys = tokenizer.nextToken();
+				settings["mm-cell-x"] = xs;
+				settings["mm-cell-y"] = ys;
+				settings.erase("mm-cell");
+			END_OPTION
+
+			DO_LONG_OPTION("mm-facing")
+			END_OPTION
+
+			DO_LONG_OPTION_INT("mm-side")
+			END_OPTION
 
 unknownOption:
 			// If we get till here, the option is unhandled and hence unknown.
