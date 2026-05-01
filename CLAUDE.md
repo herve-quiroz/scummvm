@@ -7,6 +7,10 @@ This is a fork of [ScummVM](https://github.com/scummvm/scummvm). It exists to se
 * **Is:** vanilla upstream ScummVM + a self-contained screenshot harness for the MM/Xeen engine. Patches are confined to a small set of files: `base/commandLine.cpp` (CLI option parsing), `backends/platform/sdl/posix/posix-main.cpp` (headless force), `engines/mm/xeen/screen.h` (palette accessor), `engines/mm/xeen/screenshot_harness.{h,cpp}` (the harness module), `engines/mm/xeen/xeen.cpp` (call site).
 * **Isn't:** an upstream contribution (yet). Not a maintained ScummVM distribution. Don't take general ScummVM bug reports here.
 
+## Scope of upstream policies
+
+`AI-GUIDELINES.md` at the repo root is upstream ScummVM's contributor policy for PRs to `scummvm/scummvm` (no AI-authored code, mandatory `Assisted-by:` trailers, etc.). It does **not** govern commits on the `screenshot-harness` branch of this fork. Harness commits are tooling for mm5e, not contributions to upstream, and may be Claude-authored without `Assisted-by:` trailers. If/when a harness change is ever proposed upstream, that submission would need to comply with `AI-GUIDELINES.md` separately.
+
 ## Branches and tags
 
 | Branch / Tag | What it is |
