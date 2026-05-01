@@ -309,6 +309,6 @@ __pycache__/
 #Ignore vcpkg generated files
 /vcpkg_installed/
 
-#Ignore Claude instruction files
-CLAUDE.md
-.claude
+# Note: upstream's `CLAUDE.md` and `.claude/` ignore entries are intentionally
+# absent on this branch. The fork uses `CLAUDE.md` to brief future Claude
+# Code sessions about what this fork is for. See CLAUDE.md and HARNESS.md.
