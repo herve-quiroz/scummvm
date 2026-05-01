@@ -27,6 +27,7 @@
 #include "mm/xeen/xeen.h"
 #include "mm/xeen/files.h"
 #include "mm/xeen/resources.h"
+#include "mm/xeen/screenshot_harness.h"
 
 namespace MM {
 namespace Xeen {
@@ -189,9 +190,16 @@ void XeenEngine::loadSettings() {
 }
 
 Common::Error XeenEngine::run() {
-	if (initialize())
-		outerGameLoop();
+	if (!initialize())
+		return Common::kNoError;
 
+	if (ScreenshotHarness::isEnabled()) {
+		int rc = ScreenshotHarness::run(this);
+		// Map non-zero rc to a ScummVM error so the process exits non-zero.
+		return rc == 0 ? Common::kNoError : Common::kUnknownError;
+	}
+
+	outerGameLoop();
 	return Common::kNoError;
 }
 
