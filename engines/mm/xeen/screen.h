@@ -123,6 +123,18 @@ public:
 	 * @returns		True if key or mouse pressed
 	 */
 	bool doScroll(bool rollUp, bool fadeInFlag);
+
+	/**
+	 * Copy the engine's active 256-entry RGB palette into out.
+	 * @param out  Buffer of at least PALETTE_SIZE (256 * 3) bytes.
+	 *
+	 * Returns the engine's own copy of the palette rather than asking the
+	 * SDL backend, so it is correct under the dummy/offscreen video drivers
+	 * where the backend's palette manager may not retain state.
+	 */
+	void getMainPalette(byte *out) const {
+		Common::copy(_mainPalette, _mainPalette + PALETTE_SIZE, out);
+	}
 };
 
 } // End of namespace Xeen

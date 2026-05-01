@@ -31,9 +31,7 @@
 #include "common/config-manager.h"
 #include "common/file.h"
 #include "common/str.h"
-#include "common/system.h"
 #include "common/textconsole.h"
-#include "graphics/paletteman.h"
 #include "image/png.h"
 #include "mm/xeen/files.h"
 #include "mm/xeen/interface.h"
@@ -181,13 +179,17 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 
 	// Run the same first-frame setup that XeenEngine::play() runs.
 	vm->_mode = MODE_INTERACTIVE;
+	// outerGameLoop normally clears _gameMode to GMODE_NONE before play()
+	// runs. We bypass outerGameLoop, so do it here, otherwise shouldExit()
+	// returns true and Screen::fadeInner exits before applying the palette
+	// to _mainPalette (leaving the captured PNG black).
+	vm->_gameMode = GMODE_NONE;
 	vm->_interface->startup();
 	(*vm->_windows)[0].update();
 	vm->_interface->mainIconsPrint();
 	(*vm->_windows)[0].update();
 
-	// Apply the palette (engine-style fade) so the SDL backend has the live
-	// palette when we grab it for the PNG.
+	// Apply the loaded palette via the engine's normal fade-in routine.
 	vm->_screen->fadeIn();
 
 	// Re-draw scene + HUD now that the palette is live, so the captured
@@ -204,8 +206,13 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 		exit(1);
 	}
 
+	// Read the palette from the engine's own copy rather than from the
+	// SDL backend. Under the dummy / offscreen video drivers ScummVM uses
+	// for headless harness runs, getPaletteManager()->grabPalette() returns
+	// all zeros, which would produce a paletted PNG of pure black even
+	// though the surface buffer is correctly populated.
 	byte palette[256 * 3];
-	g_system->getPaletteManager()->grabPalette(palette, 0, 256);
+	vm->_screen->getMainPalette(palette);
 
 	if (!Image::writePNG(out, vm->_screen->rawSurface(), palette)) {
 		warning("Screenshot harness: writePNG failed for '%s'",

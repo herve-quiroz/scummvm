@@ -19,15 +19,34 @@
  *
  */
 
+// Needed so the screenshot-harness mode can force SDL_VIDEODRIVER=dummy
+// before g_system->init() opens a window.
+#define FORBIDDEN_SYMBOL_EXCEPTION_setenv
+
 #include "common/scummsys.h"
 
 #if defined(POSIX) && !defined(MACOSX) && !defined(SAMSUNGTV) && !defined(MAEMO) && !defined(OPENDINGUX) && !defined(OPENPANDORA) && !defined(PLAYSTATION3) && !defined(PSP2) && !defined(NINTENDO_SWITCH)  && !defined(__EMSCRIPTEN__) && !defined(MIYOO) && !defined(MIYOOMINI) && !defined(SAILFISH)
+
+#include <stdlib.h>
+#include <string.h>
 
 #include "backends/platform/sdl/posix/posix.h"
 #include "backends/plugins/sdl/sdl-provider.h"
 #include "base/main.h"
 
 int main(int argc, char *argv[]) {
+
+	// MM/Xeen screenshot harness mode: when --mm-screenshot=PATH is on
+	// the command line, force the dummy SDL video driver so no game
+	// window pops up while the harness renders one frame and exits.
+	// Honour any SDL_VIDEODRIVER the user already set (so they can
+	// pick "offscreen" or another driver if they prefer).
+	for (int i = 1; i < argc; ++i) {
+		if (argv[i] && strncmp(argv[i], "--mm-screenshot=", 16) == 0) {
+			setenv("SDL_VIDEODRIVER", "dummy", 0);
+			break;
+		}
+	}
 
 	// Create our OSystem instance
 	g_system = new OSystem_POSIX();
