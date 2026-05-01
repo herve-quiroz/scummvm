@@ -194,9 +194,8 @@ Common::Error XeenEngine::run() {
 		return Common::kNoError;
 
 	if (ScreenshotHarness::isEnabled()) {
-		int rc = ScreenshotHarness::run(this);
-		// Map non-zero rc to a ScummVM error so the process exits non-zero.
-		return rc == 0 ? Common::kNoError : Common::kUnknownError;
+		ScreenshotHarness::run(this);  // never returns; calls _exit / exit.
+		return Common::kNoError;       // unreachable, but satisfies the signature.
 	}
 
 	outerGameLoop();

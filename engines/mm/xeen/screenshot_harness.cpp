@@ -1,3 +1,8 @@
+// The harness is a one-shot CLI mode: we bypass ScummVM's normal
+// engine-completion path (which would show a launcher or modal error
+// dialog) by calling _exit() directly with our chosen status code.
+#define FORBIDDEN_SYMBOL_EXCEPTION_exit
+
 /* ScummVM - Graphic Adventure Engine
  *
  * ScummVM is the legal property of its developers, whose names
@@ -20,6 +25,8 @@
  */
 
 #include "mm/xeen/screenshot_harness.h"
+
+#include <stdlib.h>
 
 #include "common/config-manager.h"
 #include "common/file.h"
@@ -116,7 +123,7 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	Common::String err;
 	if (!parseSettings(s, err)) {
 		warning("Screenshot harness: %s", err.c_str());
-		return 1;
+		exit(1);
 	}
 
 	// Refuse to run on anything other than World of Xeen — the spec only
@@ -124,7 +131,7 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	if (vm->getGameID() != GType_WorldOfXeen) {
 		warning("Screenshot harness: target must be World of Xeen (got gameID=%u)",
 			vm->getGameID());
-		return 1;
+		exit(1);
 	}
 
 	// --- bootstrap (mirrors XeenEngine::playGame() + play() up to gameLoop) ---
@@ -163,7 +170,7 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	if (vm->_map->mazeData()._mazeId != s.mazeId) {
 		warning("Screenshot harness: maze %u failed to load (loaded id=%d)",
 			s.mazeId, vm->_map->mazeData()._mazeId);
-		return 1;
+		exit(1);
 	}
 
 	// Re-apply the requested position — Map::load can mutate party state
@@ -194,7 +201,7 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	if (!out.open(s.screenshotPath)) {
 		warning("Screenshot harness: cannot open '%s' for writing",
 			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
-		return 1;
+		exit(1);
 	}
 
 	byte palette[256 * 3];
@@ -206,16 +213,17 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 		out.close();
 		// Caller must check exit status; the partial PNG may be left on
 		// disk but the non-zero exit signals it should not be trusted.
-		return 1;
+		exit(1);
 	}
 
 	out.close();
 	debug("Screenshot harness: wrote %s",
 		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
 
-	// Cause outerGameLoop to exit cleanly.
-	vm->_gameMode = GMODE_QUIT;
-	return 0;
+	// One-shot mode: skip ScummVM's launcher / error dialog by exiting
+	// immediately. The successful PNG is the only artifact this run is
+	// supposed to leave behind.
+	exit(0);
 }
 
 } // End of namespace Xeen
