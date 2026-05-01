@@ -345,6 +345,7 @@ MODULE_OBJS += \
 	xeen/sprites.o \
 	xeen/subtitles.o \
 	xeen/window.o \
+	xeen/screenshot_harness.o \
 	xeen/xeen.o
 endif
 
