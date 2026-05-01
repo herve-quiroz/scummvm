@@ -1094,12 +1094,12 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 				Common::String ys = tokenizer.nextToken();
 				if (xs.empty() || ys.empty())
 					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
-				for (uint i = 0; i < xs.size(); ++i) {
-					if (!Common::isDigit(xs[i]))
+				for (uint c = 0; c < xs.size(); ++c) {
+					if (!Common::isDigit(xs[c]))
 						usage("Invalid --mm-cell X value: %s (must be a non-negative integer)", xs.c_str());
 				}
-				for (uint i = 0; i < ys.size(); ++i) {
-					if (!Common::isDigit(ys[i]))
+				for (uint c = 0; c < ys.size(); ++c) {
+					if (!Common::isDigit(ys[c]))
 						usage("Invalid --mm-cell Y value: %s (must be a non-negative integer)", ys.c_str());
 				}
 				settings["mm-cell-x"] = xs;
