@@ -41,7 +41,7 @@ namespace MM {
 namespace Xeen {
 
 bool ScreenshotHarness::isEnabled() {
-	return ConfMan.hasKey("mm-screenshot") && !ConfMan.get("mm-screenshot").empty();
+	return ConfMan.hasKey("mm_screenshot") && !ConfMan.get("mm_screenshot").empty();
 }
 
 static bool parseFacing(const Common::String &raw, Direction &out) {
@@ -57,29 +57,29 @@ static bool parseFacing(const Common::String &raw, Direction &out) {
 }
 
 bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
-	if (!ConfMan.hasKey("mm-screenshot") || ConfMan.get("mm-screenshot").empty()) {
+	if (!ConfMan.hasKey("mm_screenshot") || ConfMan.get("mm_screenshot").empty()) {
 		err = "--mm-screenshot=PATH is required";
 		return false;
 	}
-	out.screenshotPath = Common::Path::fromConfig(ConfMan.get("mm-screenshot"));
+	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("mm_screenshot"));
 
-	if (!ConfMan.hasKey("mm-maze")) {
+	if (!ConfMan.hasKey("mm_maze")) {
 		err = "--mm-maze=N is required";
 		return false;
 	}
-	int maze = ConfMan.getInt("mm-maze");
+	int maze = ConfMan.getInt("mm_maze");
 	if (maze < 1 || maze > 128) {
 		err = Common::String::format("--mm-maze=%d out of range (expected 1-128)", maze);
 		return false;
 	}
 	out.mazeId = (uint8)maze;
 
-	if (!ConfMan.hasKey("mm-cell-x") || !ConfMan.hasKey("mm-cell-y")) {
+	if (!ConfMan.hasKey("mm_cell_x") || !ConfMan.hasKey("mm_cell_y")) {
 		err = "--mm-cell=X,Y is required";
 		return false;
 	}
-	int x = atoi(ConfMan.get("mm-cell-x").c_str());
-	int y = atoi(ConfMan.get("mm-cell-y").c_str());
+	int x = atoi(ConfMan.get("mm_cell_x").c_str());
+	int y = atoi(ConfMan.get("mm_cell_y").c_str());
 	if (x < 0 || x > 15 || y < 0 || y > 15) {
 		err = Common::String::format("--mm-cell=%d,%d out of range (each 0-15)", x, y);
 		return false;
@@ -87,20 +87,20 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	out.cellX = (uint8)x;
 	out.cellY = (uint8)y;
 
-	if (!ConfMan.hasKey("mm-facing")) {
+	if (!ConfMan.hasKey("mm_facing")) {
 		err = "--mm-facing=N|E|S|W is required";
 		return false;
 	}
-	if (!parseFacing(ConfMan.get("mm-facing"), out.facing)) {
+	if (!parseFacing(ConfMan.get("mm_facing"), out.facing)) {
 		err = Common::String::format(
 			"--mm-facing=%s invalid (expected N, E, S, or W)",
-			ConfMan.get("mm-facing").c_str());
+			ConfMan.get("mm_facing").c_str());
 		return false;
 	}
 
 	out.side = 0;
-	if (ConfMan.hasKey("mm-side")) {
-		int s = ConfMan.getInt("mm-side");
+	if (ConfMan.hasKey("mm_side")) {
+		int s = ConfMan.getInt("mm_side");
 		if (s != 0 && s != 1) {
 			err = Common::String::format("--mm-side=%d invalid (expected 0 or 1)", s);
 			return false;

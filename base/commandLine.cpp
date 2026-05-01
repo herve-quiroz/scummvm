@@ -1076,7 +1076,7 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 #endif
 
-			DO_LONG_OPTION_PATH("mm-screenshot")
+			DO_LONG_OPTION("mm-screenshot")
 			END_OPTION
 
 			DO_LONG_OPTION_INT("mm-maze")
@@ -1102,8 +1102,8 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 					if (!Common::isDigit(ys[c]))
 						usage("Invalid --mm-cell Y value: %s (must be a non-negative integer)", ys.c_str());
 				}
-				settings["mm-cell-x"] = xs;
-				settings["mm-cell-y"] = ys;
+				settings["mm_cell_x"] = xs;
+				settings["mm_cell_y"] = ys;
 				settings.erase("mm-cell");
 			END_OPTION
 
