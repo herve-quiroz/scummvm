@@ -37,10 +37,11 @@ engine; ScummVM does not expose `--music-mute` style flags as CLI options.
 | `--mm-cell` | yes | `X,Y` (each 0-15) | Party cell coordinates. |
 | `--mm-facing` | yes | `N`, `E`, `S`, or `W` (case-insensitive) | Party facing direction. |
 | `--mm-side` | no (default 0) | `0` or `1` | World of Xeen side: 0=Clouds, 1=Dark Side. |
+| `--mm-no-monsters` | no (default off) | (no value) | Suppress monsters in the rendered frame. Static scene (walls, objects, wall items) only. |
 
 The corresponding ConfMan keys are `mm_screenshot`, `mm_maze`, `mm_cell_x`,
-`mm_cell_y`, `mm_facing`, `mm_side` (ScummVM rewrites option dashes to
-underscores in its config storage).
+`mm_cell_y`, `mm_facing`, `mm_side`, `mm_no_monsters` (ScummVM rewrites
+option dashes to underscores in its config storage).
 
 ## Behaviour
 

@@ -51,8 +51,9 @@ public:
 		uint8 cellY;
 		Direction facing;
 		uint8 side; // 0 = Clouds, 1 = Dark Side
+		bool noMonsters;
 
-		Settings() : mazeId(0), cellX(0), cellY(0), facing(DIR_NORTH), side(0) {}
+		Settings() : mazeId(0), cellX(0), cellY(0), facing(DIR_NORTH), side(0), noMonsters(false) {}
 	};
 
 	/**

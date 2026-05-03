@@ -166,6 +166,7 @@ static const char HELP_STRING4[] =
 	"  --mm-cell=X,Y            [MM/Xeen] Party cell coordinates (each 0-15).\n"
 	"  --mm-facing=N|E|S|W      [MM/Xeen] Party facing direction.\n"
 	"  --mm-side=0|1            [MM/Xeen] World of Xeen side (0=Clouds default, 1=Dark).\n"
+	"  --mm-no-monsters         [MM/Xeen] Suppress monster rendering in the harness frame.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1111,6 +1112,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION_INT("mm-side")
+			END_OPTION
+
+			DO_LONG_OPTION_BOOL("mm-no-monsters")
 			END_OPTION
 
 unknownOption:

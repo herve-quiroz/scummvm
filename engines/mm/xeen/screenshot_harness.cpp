@@ -113,6 +113,8 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 		out.side = (uint8)s;
 	}
 
+	out.noMonsters = ConfMan.hasKey("mm_no_monsters") && ConfMan.getBool("mm_no_monsters");
+
 	return true;
 }
 
@@ -176,6 +178,13 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	// the caller asked for.
 	vm->_party->_mazePosition = Common::Point(s.cellX, s.cellY);
 	vm->_party->_mazeDirection = s.facing;
+
+	// Drop monsters if requested, so the captured frame contains only the
+	// static scene (walls, objects, wall items). The indoor/outdoor draw
+	// paths both iterate _mobData._monsters and are no-ops on an empty
+	// array, so this is the least invasive suppression point.
+	if (s.noMonsters)
+		vm->_map->_mobData._monsters.clear();
 
 	// Run the same first-frame setup that XeenEngine::play() runs.
 	vm->_mode = MODE_INTERACTIVE;
