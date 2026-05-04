@@ -32,6 +32,7 @@
 #include "common/file.h"
 #include "common/str.h"
 #include "common/textconsole.h"
+#include "graphics/surface.h"
 #include "image/png.h"
 #include "kyra/detection.h"
 #include "kyra/engine/eobcommon.h"
@@ -110,9 +111,103 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		exit(1);
 	}
 
-	// Filled in by Task A3.
-	(void)vm;
-	exit(1);
+	// Refuse to run on anything other than EOB2. The renderer paths
+	// and resource layout for EOB1 differ enough that sharing one
+	// harness would be brittle.
+	if (vm->_flags.gameID != GI_EOB2) {
+		warning("Screenshot harness: target must be Eye of the Beholder II "
+			"(got gameID=%d)", vm->_flags.gameID);
+		exit(1);
+	}
+
+	// --- bootstrap (mirrors EoBEngine::startupNew + minimal startup) ---
+	// We deliberately skip:
+	//   - intro / title screen
+	//   - main menu / character creation
+	//   - importOrigSaves (handled by the caller's EoBCoreEngine::go path
+	//     before this harness is reached, so already settled)
+	//   - sound resource selection (engine is silenced via --music-driver=null)
+	//
+	// We do need:
+	//   - level state: _currentLevel, _currentSub, loadLevel(level, 0)
+	//   - party position: _currentBlock = y*32+x, _currentDirection
+	//   - hand item slot (so portrait draw doesn't crash)
+	//   - default party state from EoBCoreEngine::startupNew
+
+	// EoBCoreEngine::startupNew populates the party with a default set
+	// of characters so portrait drawing has something to render. Without
+	// this, _characters[] is zero-initialized and the portrait code may
+	// crash or render garbage. Run startupNew first so its own loadLevel
+	// is overridden by ours below.
+	vm->startupNew();
+
+	vm->_currentLevel = s.level;
+	vm->_currentSub = 0;
+	vm->loadLevel(s.level, 0);
+	vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
+	vm->_currentDirection = s.facing;
+	vm->setHandItem(0);
+
+	// Optional actor suppression. EOB2's monster table is _monsters[]
+	// owned by EoBCoreEngine; setting block to 0 is the in-engine
+	// "out of play" marker (see killMonster + placeMonster), so the
+	// drawMonsters pass skips them without disturbing wall/decoration
+	// draw paths.
+	if (s.noActors) {
+		for (int i = 0; i < 30; ++i) {
+			vm->_monsters[i].block = 0;
+		}
+	}
+
+	// --- draw the frame ---
+	// drawScene() renders the 3D viewport into the back buffer.
+	// gui_drawAllCharPortraitsWithStats() renders the right-side HUD.
+	vm->drawScene(1);
+	vm->gui_drawAllCharPortraitsWithStats();
+
+	// Force the back buffer to the front so the page-0 surface contains
+	// the composed frame. EOB's drawScene already calls copyRegion on
+	// success, but the explicit update mirrors what a player would see
+	// at the end of a normal frame.
+	vm->_screen->updateScreen();
+
+	// --- save the frame ---
+	Common::DumpFile out;
+	if (!out.open(s.screenshotPath)) {
+		warning("Screenshot harness: cannot open '%s' for writing",
+			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		exit(1);
+	}
+
+	// Read the palette from the engine's own copy rather than the SDL
+	// backend. Under the dummy/offscreen drivers the backend returns
+	// zeros, producing an all-black PNG. This is the same trap the
+	// MM/Xeen harness hit; we avoid it the same way.
+	//
+	// Kyra stores 6-bit VGA palette internally; getRealPalette converts
+	// to 8-bit RGB suitable for PNG output.
+	byte palette[256 * 3];
+	vm->_screen->getRealPalette(0, palette);
+
+	// Wrap page 0 of the Screen as a Graphics::Surface for writePNG.
+	// Page 0 is the visible front buffer; updateScreen() above made sure
+	// it carries the freshly composed frame.
+	Graphics::Surface surf;
+	surf.init(Screen::SCREEN_W, Screen::SCREEN_H, Screen::SCREEN_W,
+		vm->_screen->getPagePtr(0), Graphics::PixelFormat::createFormatCLUT8());
+
+	if (!Image::writePNG(out, surf, palette)) {
+		warning("Screenshot harness: writePNG failed for '%s'",
+			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		out.close();
+		exit(1);
+	}
+
+	out.close();
+	debug("Screenshot harness: wrote %s",
+		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+
+	exit(0);
 }
 
 } // End of namespace Kyra

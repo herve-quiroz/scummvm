@@ -268,6 +268,7 @@ friend class EoBInfProcessor;
 friend class DarkmoonSequenceHelper;
 friend class CharacterGenerator;
 friend class TransferPartyWiz;
+friend class ScreenshotHarness;
 public:
 	EoBCoreEngine(OSystem *system, const GameFlags &flags);
 	~EoBCoreEngine() override;

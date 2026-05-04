@@ -239,6 +239,7 @@ struct KyraRpgGUISettings {
 
 class KyraRpgEngine : public KyraEngine_v1 {
 friend class TextDisplayer_rpg;
+friend class ScreenshotHarness;
 public:
 	KyraRpgEngine(OSystem *system, const GameFlags &flags);
 	~KyraRpgEngine() override;
