@@ -115,6 +115,7 @@ endif
 MODULE_OBJS += \
 	engine/chargen.o \
 	engine/eobcommon.o \
+	engine/screenshot_harness.o \
 	engine/eob.o \
 	engine/darkmoon.o \
 	engine/items_eob.o \

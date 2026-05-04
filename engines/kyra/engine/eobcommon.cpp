@@ -22,6 +22,7 @@
 #ifdef ENABLE_EOB
 
 #include "kyra/engine/kyra_rpg.h"
+#include "kyra/engine/screenshot_harness.h"
 #include "kyra/resource/resource.h"
 #include "kyra/sound/sound_intern.h"
 #include "kyra/sound/sound_pc_v1.h"
@@ -625,6 +626,14 @@ Common::Error EoBCoreEngine::go() {
 	loadItemsAndDecorationsShapes();
 
 	_screen->setMouseCursor(0, 0, _itemIconShapes[0]);
+
+	// Screenshot harness: one-shot CLI mode that bypasses the menu,
+	// renders one frame at a known (level, cell, facing), writes a PNG,
+	// and exits. Triggered by --screenshot=PATH on the command line.
+	if (ScreenshotHarness::isEnabled()) {
+		ScreenshotHarness::run(this);  // never returns; calls exit().
+		return Common::kNoError;       // unreachable, but satisfies the signature.
+	}
 
 	// Import original save game files (especially the "Quick Start Party").
 	// The SegaCD version has a "Default Party" main menu option instead.

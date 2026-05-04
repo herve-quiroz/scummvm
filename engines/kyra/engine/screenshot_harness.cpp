@@ -191,10 +191,14 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 
 	// Wrap page 0 of the Screen as a Graphics::Surface for writePNG.
 	// Page 0 is the visible front buffer; updateScreen() above made sure
-	// it carries the freshly composed frame.
+	// it carries the freshly composed frame. getPagePtr() is protected,
+	// so use the public copyRegionToBuffer() to grab the full page.
+	byte pageBuf[Screen::SCREEN_W * Screen::SCREEN_H];
+	vm->_screen->copyRegionToBuffer(0, 0, 0, Screen::SCREEN_W, Screen::SCREEN_H, pageBuf);
+
 	Graphics::Surface surf;
 	surf.init(Screen::SCREEN_W, Screen::SCREEN_H, Screen::SCREEN_W,
-		vm->_screen->getPagePtr(0), Graphics::PixelFormat::createFormatCLUT8());
+		pageBuf, Graphics::PixelFormat::createFormatCLUT8());
 
 	if (!Image::writePNG(out, surf, palette)) {
 		warning("Screenshot harness: writePNG failed for '%s'",
