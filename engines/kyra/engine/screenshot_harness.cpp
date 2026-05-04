@@ -1,7 +1,14 @@
 // The harness is a one-shot CLI mode: we bypass ScummVM's normal
 // engine-completion path (which would show a launcher or modal error
 // dialog) by calling _exit() directly with our chosen status code.
+// _exit skips atexit hooks so we don't deadlock on SDL2/audio thread
+// destructors that the engine's own message loop normally drains before
+// teardown.
 #define FORBIDDEN_SYMBOL_EXCEPTION_exit
+
+// Pull <unistd.h> in before "common/forbidden.h" so its declarations of
+// chdir/getcwd/etc. don't collide with the forbidden-symbol macros.
+#include <unistd.h>
 
 /* ScummVM - Graphic Adventure Engine
  *
@@ -108,7 +115,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	Common::String err;
 	if (!parseSettings(s, err)) {
 		warning("Screenshot harness: %s", err.c_str());
-		exit(1);
+		_exit(1);
 	}
 
 	// Refuse to run on anything other than EOB2. The renderer paths
@@ -117,7 +124,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	if (vm->_flags.gameID != GI_EOB2) {
 		warning("Screenshot harness: target must be Eye of the Beholder II "
 			"(got gameID=%d)", vm->_flags.gameID);
-		exit(1);
+		_exit(1);
 	}
 
 	// --- bootstrap (mirrors EoBEngine::startupNew + minimal startup) ---
@@ -176,7 +183,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	if (!out.open(s.screenshotPath)) {
 		warning("Screenshot harness: cannot open '%s' for writing",
 			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
-		exit(1);
+		_exit(1);
 	}
 
 	// Read the palette from the engine's own copy rather than the SDL
@@ -204,14 +211,14 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		warning("Screenshot harness: writePNG failed for '%s'",
 			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
 		out.close();
-		exit(1);
+		_exit(1);
 	}
 
 	out.close();
 	debug("Screenshot harness: wrote %s",
 		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
 
-	exit(0);
+	_exit(0);
 }
 
 } // End of namespace Kyra
