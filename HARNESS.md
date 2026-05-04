@@ -11,12 +11,12 @@ regression suite.
     --path="/mnt/c/Program Files (x86)/GOG Galaxy/Games/Might and Magic 4-5/" \
     --extrapath=/home/hqz/src/scummvm/dists/engine-data \
     --music-driver=null -m 0 -s 0 -r 0 \
-    --mm-screenshot=/tmp/out.png \
-    --mm-maze=28 --mm-cell=8,8 --mm-facing=N \
+    --screenshot=/tmp/out.png \
+    --level=28 --cell=8,8 --facing=N \
     worldofxeen
 ```
 
-The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--mm-screenshot` is on
+The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot` is on
 the command line, so no game window pops up regardless of whether a real X /
 Wayland display is present. To pick a different driver (e.g. `offscreen`),
 set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var
@@ -32,16 +32,16 @@ engine; ScummVM does not expose `--music-mute` style flags as CLI options.
 
 | Flag | Required | Format | Description |
 |------|----------|--------|-------------|
-| `--mm-screenshot` | yes | absolute filesystem path | Output PNG. Must be writable. Presence enables harness mode. |
-| `--mm-maze` | yes | integer 1-128 | Map ID. |
-| `--mm-cell` | yes | `X,Y` (each 0-15) | Party cell coordinates. |
-| `--mm-facing` | yes | `N`, `E`, `S`, or `W` (case-insensitive) | Party facing direction. |
-| `--mm-side` | no (default 0) | `0` or `1` | World of Xeen side: 0=Clouds, 1=Dark Side. |
-| `--mm-no-monsters` | no (default off) | (no value) | Suppress monsters in the rendered frame. Static scene (walls, objects, wall items) only. |
+| `--screenshot` | yes | absolute filesystem path | Output PNG. Must be writable. Presence enables harness mode. |
+| `--level` | yes | integer 1-128 (MM/Xeen maze ID) | Map ID. |
+| `--cell` | yes | `X,Y` (each 0-15) | Party cell coordinates. |
+| `--facing` | yes | `N`, `E`, `S`, or `W` (case-insensitive) | Party facing direction. |
+| `--mm-side` | no (default 0) | `0` or `1` | World of Xeen side: 0=Clouds, 1=Dark Side. MM/Xeen-specific. |
+| `--no-actors` | no (default off) | (no value) | Suppress actor rendering (monsters in MM/Xeen). Static scene (walls, objects, wall items) only. |
 
-The corresponding ConfMan keys are `mm_screenshot`, `mm_maze`, `mm_cell_x`,
-`mm_cell_y`, `mm_facing`, `mm_side`, `mm_no_monsters` (ScummVM rewrites
-option dashes to underscores in its config storage).
+The corresponding ConfMan keys are `screenshot`, `level`, `cell_x`,
+`cell_y`, `facing`, `mm_side`, `no_actors` (ScummVM rewrites option
+dashes to underscores in its config storage).
 
 ## Behaviour
 
@@ -89,7 +89,7 @@ self-contained process with no shared state.
 
 ## Source pointers (for maintainers)
 
-* CLI option parsing: `base/commandLine.cpp` (search for `mm-screenshot`).
+* CLI option parsing: `base/commandLine.cpp` (search for `--screenshot`).
 * Headless force: `backends/platform/sdl/posix/posix-main.cpp` (early `setenv` of `SDL_VIDEODRIVER=dummy`).
 * Engine palette accessor: `engines/mm/xeen/screen.h` (`Screen::getMainPalette`).
 * Harness module: `engines/mm/xeen/screenshot_harness.{h,cpp}`.

@@ -36,13 +36,13 @@
 
 int main(int argc, char *argv[]) {
 
-	// MM/Xeen screenshot harness mode: when --mm-screenshot=PATH is on
-	// the command line, force the dummy SDL video driver so no game
-	// window pops up while the harness renders one frame and exits.
-	// Honour any SDL_VIDEODRIVER the user already set (so they can
-	// pick "offscreen" or another driver if they prefer).
+	// Screenshot harness mode: when --screenshot=PATH is on the command
+	// line, force the dummy SDL video driver so no game window pops up
+	// while the harness renders one frame and exits. Honour any
+	// SDL_VIDEODRIVER the user already set (so they can pick "offscreen"
+	// or another driver if they prefer).
 	for (int i = 1; i < argc; ++i) {
-		if (argv[i] && strncmp(argv[i], "--mm-screenshot=", 16) == 0) {
+		if (argv[i] && strncmp(argv[i], "--screenshot=", 13) == 0) {
 			setenv("SDL_VIDEODRIVER", "dummy", 0);
 			break;
 		}

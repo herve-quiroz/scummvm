@@ -34,10 +34,14 @@ class XeenEngine;
 /**
  * One-shot reference-screenshot harness for MM4/Xeen.
  *
- * When enabled via CLI flags (--mm-screenshot, --mm-maze, --mm-cell,
- * --mm-facing, optional --mm-side), the harness bypasses the intro and
- * main menu, teleports the party to the requested cell, renders a single
- * first-person frame, writes it as a PNG, and exits.
+ * When enabled via CLI flags (--screenshot, --level, --cell, --facing,
+ * optional --mm-side, optional --no-actors), the harness bypasses the
+ * intro and main menu, teleports the party to the requested cell,
+ * renders a single first-person frame, writes it as a PNG, and exits.
+ *
+ * Note: --no-actors skips rendering actors. In MM/Xeen, "actors" means
+ * monsters; the cross-engine flag uses the broader term so it covers
+ * other moving entities (NPCs, encounter triggers) in other engines.
  *
  * Designed to be invoked by an external test harness that diff-compares
  * the produced PNGs against an independently rendered set.
@@ -57,7 +61,7 @@ public:
 	};
 
 	/**
-	 * @returns true if --mm-screenshot was supplied on the command line.
+	 * @returns true if --screenshot was supplied on the command line.
 	 */
 	static bool isEnabled();
 

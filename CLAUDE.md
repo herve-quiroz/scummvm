@@ -30,16 +30,16 @@ CLI invocation (full contract is in `HARNESS.md`):
     --path="/path/to/Might and Magic 4-5/" \
     --extrapath=./dists/engine-data \
     --music-driver=null -m 0 -s 0 -r 0 \
-    --mm-screenshot=/tmp/out.png \
-    --mm-maze=28 --mm-cell=8,8 --mm-facing=N \
+    --screenshot=/tmp/out.png \
+    --level=28 --cell=8,8 --facing=N \
     worldofxeen
 ```
 
-Outputs a 320×200 PNG of the rendered first-person frame and exits. Headless via `SDL_VIDEODRIVER=dummy` (auto-set when `--mm-screenshot` is on the CLI).
+Outputs a 320×200 PNG of the rendered first-person frame and exits. Headless via `SDL_VIDEODRIVER=dummy` (auto-set when `--screenshot` is on the CLI).
 
 Source pointers:
 
-* CLI parsing: `base/commandLine.cpp`, search for `mm-screenshot`.
+* CLI parsing: `base/commandLine.cpp`, search for `--screenshot`.
 * Headless force: `backends/platform/sdl/posix/posix-main.cpp`, early `setenv` of `SDL_VIDEODRIVER=dummy`.
 * Engine palette accessor: `engines/mm/xeen/screen.h`, `Screen::getMainPalette`.
 * Harness module: `engines/mm/xeen/screenshot_harness.{h,cpp}`.
@@ -81,8 +81,8 @@ After any harness change, run this end-to-end smoke test (path may need adjustin
     --path="/mnt/c/Program Files (x86)/GOG Galaxy/Games/Might and Magic 4-5/" \
     --extrapath="$PWD/dists/engine-data" \
     --music-driver=null -m 0 -s 0 -r 0 \
-    --mm-screenshot=/tmp/test.png \
-    --mm-maze=28 --mm-cell=8,8 --mm-facing=N \
+    --screenshot=/tmp/test.png \
+    --level=28 --cell=8,8 --facing=N \
     worldofxeen
 ```
 
@@ -92,7 +92,7 @@ Expectations:
 * `Screenshot harness: wrote /tmp/test.png` on stderr.
 * No window pops up regardless of `DISPLAY` being set.
 * `/tmp/test.png` shows Vertigo's indoor scene (wood ceiling, stone walls, side ornaments). NOT all black; NOT an unrelated frame.
-* Run with `--mm-cell=15,8 --mm-facing=W` and confirm a different scene (entrance corridor with sky and trees visible).
+* Run with `--cell=15,8 --facing=W` and confirm a different scene (entrance corridor with sky and trees visible).
 
 If those pass, the harness is working. mm5e's regression test suite (`cmd/mm5e/scummvm_diff_integration_test.go` in mm5e) is the deeper end-to-end check.
 

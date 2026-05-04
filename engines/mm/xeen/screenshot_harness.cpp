@@ -46,7 +46,7 @@ namespace MM {
 namespace Xeen {
 
 bool ScreenshotHarness::isEnabled() {
-	return ConfMan.hasKey("mm_screenshot") && !ConfMan.get("mm_screenshot").empty();
+	return ConfMan.hasKey("screenshot") && !ConfMan.get("screenshot").empty();
 }
 
 static bool parseFacing(const Common::String &raw, Direction &out) {
@@ -62,44 +62,44 @@ static bool parseFacing(const Common::String &raw, Direction &out) {
 }
 
 bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
-	if (!ConfMan.hasKey("mm_screenshot") || ConfMan.get("mm_screenshot").empty()) {
-		err = "--mm-screenshot=PATH is required";
+	if (!ConfMan.hasKey("screenshot") || ConfMan.get("screenshot").empty()) {
+		err = "--screenshot=PATH is required";
 		return false;
 	}
-	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("mm_screenshot"));
+	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
 
-	if (!ConfMan.hasKey("mm_maze")) {
-		err = "--mm-maze=N is required";
+	if (!ConfMan.hasKey("level")) {
+		err = "--level=N is required";
 		return false;
 	}
-	int maze = ConfMan.getInt("mm_maze");
+	int maze = ConfMan.getInt("level");
 	if (maze < 1 || maze > 128) {
-		err = Common::String::format("--mm-maze=%d out of range (expected 1-128)", maze);
+		err = Common::String::format("--level=%d out of range (expected 1-128)", maze);
 		return false;
 	}
 	out.mazeId = (uint8)maze;
 
-	if (!ConfMan.hasKey("mm_cell_x") || !ConfMan.hasKey("mm_cell_y")) {
-		err = "--mm-cell=X,Y is required";
+	if (!ConfMan.hasKey("cell_x") || !ConfMan.hasKey("cell_y")) {
+		err = "--cell=X,Y is required";
 		return false;
 	}
-	int x = atoi(ConfMan.get("mm_cell_x").c_str());
-	int y = atoi(ConfMan.get("mm_cell_y").c_str());
+	int x = atoi(ConfMan.get("cell_x").c_str());
+	int y = atoi(ConfMan.get("cell_y").c_str());
 	if (x < 0 || x > 15 || y < 0 || y > 15) {
-		err = Common::String::format("--mm-cell=%d,%d out of range (each 0-15)", x, y);
+		err = Common::String::format("--cell=%d,%d out of range (each 0-15)", x, y);
 		return false;
 	}
 	out.cellX = (uint8)x;
 	out.cellY = (uint8)y;
 
-	if (!ConfMan.hasKey("mm_facing")) {
-		err = "--mm-facing=N|E|S|W is required";
+	if (!ConfMan.hasKey("facing")) {
+		err = "--facing=N|E|S|W is required";
 		return false;
 	}
-	if (!parseFacing(ConfMan.get("mm_facing"), out.facing)) {
+	if (!parseFacing(ConfMan.get("facing"), out.facing)) {
 		err = Common::String::format(
-			"--mm-facing=%s invalid (expected N, E, S, or W)",
-			ConfMan.get("mm_facing").c_str());
+			"--facing=%s invalid (expected N, E, S, or W)",
+			ConfMan.get("facing").c_str());
 		return false;
 	}
 
@@ -113,7 +113,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 		out.side = (uint8)s;
 	}
 
-	out.noMonsters = ConfMan.hasKey("mm_no_monsters") && ConfMan.getBool("mm_no_monsters");
+	out.noMonsters = ConfMan.hasKey("no_actors") && ConfMan.getBool("no_actors");
 
 	return true;
 }

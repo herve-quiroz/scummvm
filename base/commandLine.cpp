@@ -160,13 +160,13 @@ static const char HELP_STRING4[] =
 	"  -d, --debuglevel=NUM     Set debug verbosity level\n"
 	"  --debugflags=FLAGS       Enable engine specific debug flags\n"
 	"                           (separated by commas)\n"
-	"  --mm-screenshot=PATH     [MM/Xeen] Render one in-game frame to PATH and exit.\n"
-	"                           Requires --mm-maze, --mm-cell, --mm-facing.\n"
-	"  --mm-maze=N              [MM/Xeen] Maze ID for the harness frame (1-128).\n"
-	"  --mm-cell=X,Y            [MM/Xeen] Party cell coordinates (each 0-15).\n"
-	"  --mm-facing=N|E|S|W      [MM/Xeen] Party facing direction.\n"
+	"  --screenshot=PATH        Render one in-game frame to PATH and exit.\n"
+	"                           Requires --level, --cell, --facing.\n"
+	"  --level=N                Level/maze ID for the harness frame.\n"
+	"  --cell=X,Y               Party cell coordinates.\n"
+	"  --facing=N|E|S|W         Party facing direction.\n"
 	"  --mm-side=0|1            [MM/Xeen] World of Xeen side (0=Clouds default, 1=Dark).\n"
-	"  --mm-no-monsters         [MM/Xeen] Suppress monster rendering in the harness frame.\n"
+	"  --no-actors              Suppress actor (e.g. monster) rendering in the harness frame.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1077,44 +1077,44 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 #endif
 
-			DO_LONG_OPTION("mm-screenshot")
+			DO_LONG_OPTION("screenshot")
 			END_OPTION
 
-			DO_LONG_OPTION_INT("mm-maze")
+			DO_LONG_OPTION_INT("level")
 			END_OPTION
 
-			DO_LONG_OPTION("mm-cell")
-				// Split "X,Y" into separate mm-cell-x / mm-cell-y settings; the
+			DO_LONG_OPTION("cell")
+				// Split "X,Y" into separate cell-x / cell-y settings; the
 				// engine reads those keys when validating the harness invocation.
 				Common::StringTokenizer tokenizer(option, ",");
 				if (tokenizer.empty())
-					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+					usage("Invalid --cell value: %s (expected X,Y)", option);
 				Common::String xs = tokenizer.nextToken();
 				if (tokenizer.empty())
-					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+					usage("Invalid --cell value: %s (expected X,Y)", option);
 				Common::String ys = tokenizer.nextToken();
 				if (xs.empty() || ys.empty())
-					usage("Invalid --mm-cell value: %s (expected X,Y)", option);
+					usage("Invalid --cell value: %s (expected X,Y)", option);
 				for (uint c = 0; c < xs.size(); ++c) {
 					if (!Common::isDigit(xs[c]))
-						usage("Invalid --mm-cell X value: %s (must be a non-negative integer)", xs.c_str());
+						usage("Invalid --cell X value: %s (must be a non-negative integer)", xs.c_str());
 				}
 				for (uint c = 0; c < ys.size(); ++c) {
 					if (!Common::isDigit(ys[c]))
-						usage("Invalid --mm-cell Y value: %s (must be a non-negative integer)", ys.c_str());
+						usage("Invalid --cell Y value: %s (must be a non-negative integer)", ys.c_str());
 				}
-				settings["mm_cell_x"] = xs;
-				settings["mm_cell_y"] = ys;
-				settings.erase("mm-cell");
+				settings["cell_x"] = xs;
+				settings["cell_y"] = ys;
+				settings.erase("cell");
 			END_OPTION
 
-			DO_LONG_OPTION("mm-facing")
+			DO_LONG_OPTION("facing")
 			END_OPTION
 
 			DO_LONG_OPTION_INT("mm-side")
 			END_OPTION
 
-			DO_LONG_OPTION_BOOL("mm-no-monsters")
+			DO_LONG_OPTION_BOOL("no-actors")
 			END_OPTION
 
 unknownOption:
