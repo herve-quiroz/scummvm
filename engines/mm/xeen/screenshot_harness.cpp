@@ -151,6 +151,41 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 
 	// Honour the requested side and maze.
 	vm->_map->clearMaze();
+
+	// Each map's data is bundled with one side's cc/save archive: Clouds
+	// maps live in xeen.cc (side=0, surfaced via _xeenSave at runtime),
+	// Dark Side maps in dark.cc (side=1, _darkSave). A handful of
+	// Clouds-reachable maps, notably 109/110/111 (the neighbours of
+	// Vertigo), are actually stored in the Dark Side bundle. In normal
+	// play a cmdFlipWorld script flips _loadCcNum during the cross-boundary
+	// transition. The harness teleports directly without running scripts,
+	// so it has to pick the right side itself. Without this, loadEvents()
+	// raises a fatal error("Could not open file - maze...evt!"), which
+	// pops up the modal debugger console and hangs forever under headless
+	// dummy/offscreen SDL.
+	{
+		Common::Path evtName(Common::String::format(
+			"maze%c%03d.evt", (s.mazeId >= 100) ? 'x' : '0', s.mazeId));
+		SaveArchive *xeenSave = vm->_files->_xeenSave;
+		SaveArchive *darkSave = vm->_files->_darkSave;
+		bool xeenHas = xeenSave && xeenSave->hasFile(evtName);
+		bool darkHas = darkSave && darkSave->hasFile(evtName);
+		bool onRequested = (s.side == 0) ? xeenHas : darkHas;
+		if (!onRequested) {
+			uint8 other = s.side ? 0 : 1;
+			bool otherHas = (other == 0) ? xeenHas : darkHas;
+			if (otherHas) {
+				debug("Screenshot harness: maze %u not on side %u, switching to side %u",
+					s.mazeId, s.side, other);
+				s.side = other;
+			}
+			// Else: leave s.side as-is and let Map::load below report the
+			// missing file. The harness still hangs in that error path
+			// under headless SDL, but the user sees the 'Could not open
+			// file' line on stderr before the timeout fires.
+		}
+	}
+
 	vm->_map->_loadCcNum = s.side;
 	vm->_party->_mazeId = s.mazeId;
 	vm->_party->_mazePosition = Common::Point(s.cellX, s.cellY);
