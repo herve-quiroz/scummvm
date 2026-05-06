@@ -70,38 +70,61 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	}
 	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
 
-	if (!ConfMan.hasKey("level")) {
-		err = "--level=N is required";
-		return false;
+	// Save slot is optional. ScummVM's standard --save-slot=N (alias -x N)
+	// populates ConfMan["save_slot"] (default -1 meaning "no save"). When
+	// set, we restore that slot instead of doing a fresh bootstrap, and
+	// level/cell/facing become optional overrides.
+	out.saveSlot = -1;
+	if (ConfMan.hasKey("save_slot")) {
+		int slot = ConfMan.getInt("save_slot");
+		if (slot >= 0)
+			out.saveSlot = slot;
 	}
-	int level = ConfMan.getInt("level");
-	if (level < 1 || level > 16) {
-		err = Common::String::format("--level=%d out of range (expected 1-16)", level);
-		return false;
-	}
-	out.level = (uint8)level;
+	const bool haveSave = out.saveSlot >= 0;
 
-	if (!ConfMan.hasKey("cell_x") || !ConfMan.hasKey("cell_y")) {
-		err = "--cell=X,Y is required";
+	out.haveLevel = ConfMan.hasKey("level");
+	if (out.haveLevel) {
+		int level = ConfMan.getInt("level");
+		if (level < 1 || level > 16) {
+			err = Common::String::format("--level=%d out of range (expected 1-16)", level);
+			return false;
+		}
+		out.level = (uint8)level;
+	} else if (!haveSave) {
+		err = "--level=N is required (or pass --save-slot=N)";
 		return false;
 	}
-	int x = atoi(ConfMan.get("cell_x").c_str());
-	int y = atoi(ConfMan.get("cell_y").c_str());
-	if (x < 0 || x > 31 || y < 0 || y > 31) {
-		err = Common::String::format("--cell=%d,%d out of range (each 0-31)", x, y);
-		return false;
-	}
-	out.cellX = (uint8)x;
-	out.cellY = (uint8)y;
 
-	if (!ConfMan.hasKey("facing")) {
-		err = "--facing=N|E|S|W is required";
+	const bool haveCellX = ConfMan.hasKey("cell_x");
+	const bool haveCellY = ConfMan.hasKey("cell_y");
+	out.haveCell = haveCellX && haveCellY;
+	if (out.haveCell) {
+		int x = atoi(ConfMan.get("cell_x").c_str());
+		int y = atoi(ConfMan.get("cell_y").c_str());
+		if (x < 0 || x > 31 || y < 0 || y > 31) {
+			err = Common::String::format("--cell=%d,%d out of range (each 0-31)", x, y);
+			return false;
+		}
+		out.cellX = (uint8)x;
+		out.cellY = (uint8)y;
+	} else if (haveCellX != haveCellY) {
+		err = "--cell=X,Y must specify both X and Y";
+		return false;
+	} else if (!haveSave) {
+		err = "--cell=X,Y is required (or pass --save-slot=N)";
 		return false;
 	}
-	if (!parseFacing(ConfMan.get("facing"), out.facing)) {
-		err = Common::String::format(
-			"--facing=%s invalid (expected N, E, S, or W)",
-			ConfMan.get("facing").c_str());
+
+	out.haveFacing = ConfMan.hasKey("facing");
+	if (out.haveFacing) {
+		if (!parseFacing(ConfMan.get("facing"), out.facing)) {
+			err = Common::String::format(
+				"--facing=%s invalid (expected N, E, S, or W)",
+				ConfMan.get("facing").c_str());
+			return false;
+		}
+	} else if (!haveSave) {
+		err = "--facing=N|E|S|W is required (or pass --save-slot=N)";
 		return false;
 	}
 
@@ -127,33 +150,60 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		_exit(1);
 	}
 
-	// --- bootstrap (mirrors EoBEngine::startupNew + minimal startup) ---
-	// We deliberately skip:
-	//   - intro / title screen
-	//   - main menu / character creation
-	//   - importOrigSaves (handled by the caller's EoBCoreEngine::go path
-	//     before this harness is reached, so already settled)
-	//   - sound resource selection (engine is silenced via --music-driver=null)
+	// --- bootstrap ---
+	// Two paths depending on whether a save slot was requested:
 	//
-	// We do need:
-	//   - level state: _currentLevel, _currentSub, loadLevel(level, 0)
-	//   - party position: _currentBlock = y*32+x, _currentDirection
-	//   - hand item slot (so portrait draw doesn't crash)
-	//   - default party state from EoBCoreEngine::startupNew
+	//   * No save (the default): mirror EoBEngine::startupNew, then load
+	//     the requested level fresh. Skip intro / main menu / character
+	//     creation. Party state, monsters, decorations are at their
+	//     level-load defaults.
+	//
+	//   * With --save-slot=N: restore the save's full state via
+	//     loadGameState(). This brings back party, level, monster
+	//     positions, decoration toggles (open doors, pulled levers,
+	//     etc.) — anything the engine persists. After load, apply
+	//     level/cell/facing overrides if those flags were given on the
+	//     CLI; otherwise capture from the save's own position.
 
-	// EoBCoreEngine::startupNew populates the party with a default set
-	// of characters so portrait drawing has something to render. Without
-	// this, _characters[] is zero-initialized and the portrait code may
-	// crash or render garbage. Run startupNew first so its own loadLevel
-	// is overridden by ours below.
-	vm->startupNew();
+	if (s.saveSlot >= 0) {
+		// startupLoad does the equivalent of resetting graphics/sound
+		// state before the save read pulls things back in. Mirrors the
+		// engine's own _gameToLoad path in EoBCoreEngine::go.
+		vm->startupLoad();
+		Common::Error loadErr = vm->loadGameState(s.saveSlot);
+		if (loadErr.getCode() != Common::kNoError) {
+			warning("Screenshot harness: failed to load save slot %d: %s",
+				s.saveSlot, loadErr.getDesc().c_str());
+			_exit(1);
+		}
 
-	vm->_currentLevel = s.level;
-	vm->_currentSub = 0;
-	vm->loadLevel(s.level, 0);
-	vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
-	vm->_currentDirection = s.facing;
-	vm->setHandItem(0);
+		// Apply post-load overrides. If the user specified a level
+		// different from the save's, we have to call loadLevel to
+		// switch the maze data. Cell and facing are simple state
+		// updates that don't need extra calls.
+		if (s.haveLevel && s.level != vm->_currentLevel) {
+			vm->_currentLevel = s.level;
+			vm->_currentSub = 0;
+			vm->loadLevel(s.level, 0);
+		}
+		if (s.haveCell)
+			vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
+		if (s.haveFacing)
+			vm->_currentDirection = s.facing;
+	} else {
+		// EoBCoreEngine::startupNew populates the party with a default
+		// set of characters so portrait drawing has something to
+		// render. Without this, _characters[] is zero-initialized and
+		// the portrait code may crash or render garbage.
+		vm->startupNew();
+
+		vm->_currentLevel = s.level;
+		vm->_currentSub = 0;
+		vm->loadLevel(s.level, 0);
+		vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
+		vm->_currentDirection = s.facing;
+		vm->setHandItem(0);
+	}
 
 	// Optional actor suppression. EOB2's monster table is _monsters[]
 	// owned by EoBCoreEngine; setting block to 0 is the in-engine

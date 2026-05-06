@@ -34,11 +34,19 @@ class EoBCoreEngine;
  * One-shot screenshot harness for the EOB2 (KYRA) engine.
  *
  * When enabled via CLI flags (--screenshot, --level, --cell, --facing,
- * optional --no-actors), the harness bypasses the intro and main menu,
- * loads the requested level, teleports the party to the requested
- * (block, facing), draws a single frame, writes a 320x200 paletted PNG
- * to disk, and exits with status 0. On any error it prints a
- * "WARNING: Screenshot harness: ..." line to stderr and exits 1.
+ * optional --no-actors, optional --save-slot), the harness bypasses the
+ * intro and main menu, loads the requested level (or restores a save
+ * slot), teleports the party to the requested (block, facing), draws a
+ * single frame, writes a 320x200 paletted PNG to disk, and exits with
+ * status 0. On any error it prints a "WARNING: Screenshot harness: ..."
+ * line to stderr and exits 1.
+ *
+ * If --save-slot=N is passed (ScummVM's standard `-x N` flag), the
+ * harness restores that save instead of doing a fresh-game bootstrap.
+ * --level/--cell/--facing become optional in that mode and act as
+ * post-load overrides; omit them to capture the save's recorded
+ * position. This is how state-dependent scenes (open doors, pulled
+ * levers, scripted decoration changes) are captured for diffing.
  *
  * The harness only runs against EOB2 targets. EOB1 is rejected
  * because the renderer paths and resource layout differ enough that
@@ -56,6 +64,17 @@ public:
 		uint8 cellY;
 		uint8 facing;   // 0 = N, 1 = E, 2 = S, 3 = W
 		bool noActors;
+
+		// Save slot to restore. -1 means "no save, fresh load".
+		// When >= 0, level/cell/facing become optional overrides.
+		int saveSlot;
+
+		// Per-field "was this provided on the CLI?" flags. Only
+		// meaningful when saveSlot >= 0; without a save, all four
+		// fields are required and these are always true.
+		bool haveLevel;
+		bool haveCell;
+		bool haveFacing;
 	};
 
 	/** @returns true if --screenshot was supplied on the command line. */
