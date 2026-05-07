@@ -418,19 +418,11 @@ static bool writeRGBAPng(const Common::Path &path, const Graphics::Surface &pale
 
 } // anonymous namespace
 
-bool ScreenshotHarness::isScalerTestEnabled() {
-	// processSettings() rewrites '-' to '_' before pushing settings into ConfMan,
-	// so the on-the-wire flag --mm-scale-test surfaces as the key mm_scale_test.
-	return ConfMan.hasKey("mm_scale_test") && !ConfMan.get("mm_scale_test").empty();
-}
-
-int ScreenshotHarness::runScalerTest() {
-	if (!isScalerTestEnabled()) {
+int ScreenshotHarness::runScalerTest(const Common::Path &outDir) {
+	if (outDir.empty()) {
 		warning("Scaler test: --mm-scale-test=DIR is required");
 		exit(1);
 	}
-
-	Common::Path outDir = Common::Path::fromCommandLine(ConfMan.get("mm_scale_test"));
 
 	// Build the two synthetic 16x16 test patterns.
 	byte vstripes[16 * 16];

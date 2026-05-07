@@ -36,13 +36,17 @@
 
 int main(int argc, char *argv[]) {
 
-	// Screenshot harness mode: when --screenshot=PATH is on the command
-	// line, force the dummy SDL video driver so no game window pops up
-	// while the harness renders one frame and exits. Honour any
+	// Screenshot harness mode: when --screenshot=PATH or --mm-scale-test=DIR
+	// is on the command line, force the dummy SDL video driver so no game
+	// window pops up while the harness runs and exits. Honour any
 	// SDL_VIDEODRIVER the user already set (so they can pick "offscreen"
-	// or another driver if they prefer).
+	// or another driver if they prefer). The --mm-scale-test path also
+	// short-circuits inside scummvm_main before initBackend; the dummy
+	// driver here is belt-and-suspenders against the SdlWindow created
+	// by g_system->init() above.
 	for (int i = 1; i < argc; ++i) {
-		if (argv[i] && strncmp(argv[i], "--screenshot=", 13) == 0) {
+		if (argv[i] && (strncmp(argv[i], "--screenshot=", 13) == 0
+				|| strncmp(argv[i], "--mm-scale-test=", 16) == 0)) {
 			setenv("SDL_VIDEODRIVER", "dummy", 0);
 			break;
 		}

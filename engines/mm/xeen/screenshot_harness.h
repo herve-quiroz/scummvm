@@ -87,21 +87,18 @@ public:
 	static int run(XeenEngine *vm);
 
 	/**
-	 * @returns true if --mm-scale-test=DIR was supplied on the command line.
-	 */
-	static bool isScalerTestEnabled();
-
-	/**
 	 * Run the scaler reference oracle. Builds two synthetic 16x16 sprites
 	 * in memory, encodes them in Xeen's on-disk RLE format, drives them
 	 * through SpriteResource::draw at scales 0..15, and dumps RGBA PNGs
-	 * (plus the unscaled inputs) to the directory specified by
-	 * --mm-scale-test=DIR.
+	 * (plus the unscaled inputs) to @p outDir.
 	 *
-	 * Bypasses all game-data bootstrap; needs no World of Xeen archives.
+	 * Bypasses all game-data bootstrap; needs no World of Xeen archives,
+	 * no ConfMan, and no engine instance. Suitable for invocation from
+	 * base/main.cpp before backend init.
+	 *
 	 * Calls exit() with status 0 on success, non-zero on failure.
 	 */
-	static int runScalerTest();
+	static int runScalerTest(const Common::Path &outDir);
 };
 
 } // End of namespace Xeen

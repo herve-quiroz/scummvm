@@ -68,6 +68,10 @@
 #endif
 #include "graphics/scalerplugin.h"
 
+// mm5e harness: SpriteResource scaler oracle. Gated in scummvm_main()
+// before backend init / plugin resolution so it doesn't pop a window.
+#include "mm/xeen/screenshot_harness.h"
+
 #include "backends/keymapper/action.h"
 #include "backends/keymapper/keymap.h"
 #include "backends/keymapper/keymapper.h"
@@ -460,6 +464,22 @@ extern "C" int scummvm_main(int argc, const char * const argv[]) {
 		for (const auto &additionalSetting : additionalSettings) {
 			if (!settings.contains(additionalSetting._key))
 				settings[additionalSetting._key] = additionalSetting._value;
+		}
+	}
+
+	// mm5e harness: SpriteResource scaler oracle. Gate as early as
+	// possible so we don't pay for config-file load, plugin manager
+	// init, or OSystem::initBackend(). The runner only needs Common::Path
+	// + the linked-in SpriteResource + Image::writePNG; it does not need
+	// ConfMan, plugins, audio, or video. The companion change in
+	// backends/platform/sdl/posix/posix-main.cpp forces SDL_VIDEODRIVER=dummy
+	// before g_system->init() so even the early SDL window probe is silent.
+	{
+		Common::StringMap::iterator it = settings.find("mm-scale-test");
+		if (it != settings.end() && !it->_value.empty()) {
+			Common::Path outDir = Common::Path::fromCommandLine(it->_value);
+			MM::Xeen::ScreenshotHarness::runScalerTest(outDir);
+			return 0; // unreachable; runScalerTest calls exit().
 		}
 	}
 
