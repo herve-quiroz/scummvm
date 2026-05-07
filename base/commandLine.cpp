@@ -167,6 +167,7 @@ static const char HELP_STRING4[] =
 	"  --facing=N|E|S|W         Party facing direction.\n"
 	"  --mm-side=0|1            [MM/Xeen] World of Xeen side (0=Clouds default, 1=Dark).\n"
 	"  --no-actors              Suppress actor (e.g. monster) rendering in the harness frame.\n"
+	"  --mm-no-border-anims     [MM/Xeen] Suppress the five animated border UI overlays in the harness frame.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1115,6 +1116,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION_BOOL("no-actors")
+			END_OPTION
+
+			DO_LONG_OPTION_BOOL("mm-no-border-anims")
 			END_OPTION
 
 unknownOption:

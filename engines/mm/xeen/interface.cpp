@@ -1489,20 +1489,23 @@ void Interface::assembleBorder() {
 
 	// Draw the animating bat character on the left screen edge to indicate
 	// that the party is being levitated
-	_borderSprites.draw(windows[0], _vm->_party->_levitateCount ? _levitateUIFrame + 16 : 16,
-		Common::Point(0, 82));
+	if (!_suppressBorderAnims)
+		_borderSprites.draw(windows[0], _vm->_party->_levitateCount ? _levitateUIFrame + 16 : 16,
+			Common::Point(0, 82));
 	_levitateUIFrame = (_levitateUIFrame + 1) % 12;
 
 	// Draw UI element to indicate whether can spot hidden doors
-	_borderSprites.draw(0,
-		(_thinWall && _vm->_party->checkSkill(SPOT_DOORS)) ? _spotDoorsUIFrame + 28 : 28,
-		Common::Point(194, 91));
+	if (!_suppressBorderAnims)
+		_borderSprites.draw(0,
+			(_thinWall && _vm->_party->checkSkill(SPOT_DOORS)) ? _spotDoorsUIFrame + 28 : 28,
+			Common::Point(194, 91));
 	_spotDoorsUIFrame = (_spotDoorsUIFrame + 1) % 12;
 
 	// Draw UI element to indicate whether can sense danger
-	_borderSprites.draw(0,
-		(combat._dangerPresent && _vm->_party->checkSkill(DANGER_SENSE)) ? _spotDoorsUIFrame + 40 : 40,
-		Common::Point(107, 9));
+	if (!_suppressBorderAnims)
+		_borderSprites.draw(0,
+			(combat._dangerPresent && _vm->_party->checkSkill(DANGER_SENSE)) ? _spotDoorsUIFrame + 40 : 40,
+			Common::Point(107, 9));
 	_dangerSenseUIFrame = (_dangerSenseUIFrame + 1) % 12;
 
 	// Handle the face UI elements for indicating clairvoyance status
@@ -1523,10 +1526,12 @@ void Interface::assembleBorder() {
 		_face2UIFrame = 8;
 	}
 
-	_borderSprites.draw(0, _face1UIFrame, Common::Point(0, 32));
-	_borderSprites.draw(0,
-		windows[10]._enabled || windows[2]._enabled ? 52 : _face2UIFrame,
-		Common::Point(215, 32));
+	if (!_suppressBorderAnims) {
+		_borderSprites.draw(0, _face1UIFrame, Common::Point(0, 32));
+		_borderSprites.draw(0,
+			windows[10]._enabled || windows[2]._enabled ? 52 : _face2UIFrame,
+			Common::Point(215, 32));
+	}
 
 	// Draw resistance indicators
 	if (!windows[10]._enabled && !windows[2]._enabled

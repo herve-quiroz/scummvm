@@ -114,6 +114,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	}
 
 	out.noMonsters = ConfMan.hasKey("no_actors") && ConfMan.getBool("no_actors");
+	out.noBorderAnims = ConfMan.hasKey("mm_no_border_anims") && ConfMan.getBool("mm_no_border_anims");
 
 	return true;
 }
@@ -220,6 +221,18 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	// array, so this is the least invasive suppression point.
 	if (s.noMonsters)
 		vm->_map->_mobData._monsters.clear();
+
+	// Suppress the five animated border UI overlays drawn by
+	// Interface::assembleBorder() (levitate-bat, spot-doors, danger-sense,
+	// two clairvoyance faces). The mm5e renderer composites its chrome
+	// from back.raw and does not draw these animation cells, so leaving
+	// them in the reference frame produces deterministic pixel diffs that
+	// have nothing to do with the 3D viewport. Gating the draws inside
+	// Interface (rather than re-blitting back.raw over the regions here)
+	// is simpler: it avoids hard-coding sprite extents and stashing a copy
+	// of back.raw around the draw3d call.
+	if (s.noBorderAnims)
+		vm->_interface->_suppressBorderAnims = true;
 
 	// Run the same first-frame setup that XeenEngine::play() runs.
 	vm->_mode = MODE_INTERACTIVE;

@@ -173,6 +173,14 @@ public:
 	int _spotDoorsUIFrame;
 	int _dangerSenseUIFrame;
 	int _levitateUIFrame;
+	// Harness-only: when true, assembleBorder() skips the five animated UI
+	// overlays (levitate-bat, spot-doors, danger-sense, two clairvoyance
+	// faces) so a screenshot reflects only the static chrome plus the 3D
+	// viewport. The mm5e renderer composites its equivalent chrome from
+	// back.raw and never draws these animation cells, so suppressing them
+	// here removes a deterministic source of pixel diffs in the regression
+	// harness. No effect on normal gameplay.
+	bool _suppressBorderAnims = false;
 	bool _upDoorText;
 	Common::String _screenText;
 	Common::String _ttsPreviousScreenText;
