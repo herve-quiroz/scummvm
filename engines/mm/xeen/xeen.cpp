@@ -190,6 +190,17 @@ void XeenEngine::loadSettings() {
 }
 
 Common::Error XeenEngine::run() {
+	// Scaler reference oracle — bypasses initialize() entirely. The test
+	// patterns are synthesised in memory and only need the SpriteResource
+	// scaler + PNG writer; no Xeen archives, no FileManager, no graphics
+	// init. Has to come before initialize() so the launcher can pass any
+	// game id to keep its argument parser happy without us paying for the
+	// full bootstrap.
+	if (ScreenshotHarness::isScalerTestEnabled()) {
+		ScreenshotHarness::runScalerTest(); // never returns; calls exit().
+		return Common::kNoError;            // unreachable.
+	}
+
 	if (!initialize())
 		return Common::kNoError;
 

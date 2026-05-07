@@ -30,9 +30,14 @@
 
 #include "common/config-manager.h"
 #include "common/file.h"
+#include "common/memstream.h"
 #include "common/str.h"
 #include "common/textconsole.h"
+#include "graphics/managed_surface.h"
+#include "graphics/pixelformat.h"
+#include "graphics/surface.h"
 #include "image/png.h"
+#include "mm/shared/xeen/sprites.h"
 #include "mm/xeen/files.h"
 #include "mm/xeen/interface.h"
 #include "mm/xeen/map.h"
@@ -287,6 +292,217 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	// One-shot mode: skip ScummVM's launcher / error dialog by exiting
 	// immediately. The successful PNG is the only artifact this run is
 	// supposed to leave behind.
+	exit(0);
+}
+
+// ---------------------------------------------------------------------------
+// Scaler reference oracle
+//
+// Dumps SpriteResource::draw() output at every scale 0..15 across a couple of
+// synthetic 16x16 test patterns. mm5e commits these PNGs as fixtures and uses
+// them to byte-compare its own scaler against ScummVM's. We deliberately go
+// through the on-disk RLE path (load + draw) rather than a hand-rolled
+// scaler so the fixtures exercise the exact same code the live game does.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Subclass exists solely to expose the protected stream-based load() so we
+// can hand the encoded buffer in without going through the file system.
+class StreamSpriteResource : public Shared::Xeen::SpriteResource {
+public:
+	void loadFromBuffer(const byte *data, uint32 size) {
+		Common::MemoryReadStream stream(data, size, DisposeAfterUse::NO);
+		Shared::Xeen::SpriteResource::load(stream);
+	}
+};
+
+// Fixed 5-color RGBA palette. Index 0 is fully transparent; 1..4 are opaque
+// red / green / blue / white. The synthetic test inputs only use indices 1
+// and 2; 3 and 4 are reserved so future patterns can mix more colors without
+// invalidating earlier fixtures.
+struct RGBA { uint8 r, g, b, a; };
+static const RGBA kPalette[5] = {
+	{   0,   0,   0,   0 }, // 0: transparent
+	{ 255,   0,   0, 255 }, // 1: red
+	{   0, 255,   0, 255 }, // 2: green
+	{   0,   0, 255, 255 }, // 3: blue
+	{ 255, 255, 255, 255 }, // 4: white
+};
+
+// Encode one 16x16 cell as a single Xeen sprite in the on-disk RLE format
+// expected by drawSprite().
+//
+// Layout:
+//   uint16 LE frameCount = 1
+//   uint16 LE offset1   = 6                  (cell starts right after index)
+//   uint16 LE offset2   = 0                  (no foreground overlay)
+//   cell header (8 B): xOffset=0, width=16, yOffset=0, height=16
+//   16 rows, each: lineLength(1) xSkip(1) opcode(1) [16 literal palette idx]
+//
+// Row math (matches the decoder at sprites.cpp:285-340):
+//   * lineLength counts xSkip + opcode + payload = 1 + 1 + 16 = 18
+//   * opcode = 15 selects cmd 0 / len 15, which reads opcode + 1 = 16 literals
+//   * the row body on disk is 19 bytes (lineLength itself is one byte before)
+//
+// Total file size: 6 (index) + 8 (cell hdr) + 16 * 19 (rows) = 318 bytes.
+static const uint32 kSpriteSize = 6 + 8 + 16 * 19;
+
+static void writeUint16LE(byte *p, uint16 v) {
+	p[0] = (byte)(v & 0xFF);
+	p[1] = (byte)(v >> 8);
+}
+
+static void encodeSprite(byte out[kSpriteSize], const byte src[16 * 16]) {
+	byte *p = out;
+
+	// Index: frame count, then cell-1 offset and unused cell-2 offset.
+	writeUint16LE(p, 1);  p += 2;
+	writeUint16LE(p, 6);  p += 2;
+	writeUint16LE(p, 0);  p += 2;
+
+	// Cell header.
+	writeUint16LE(p, 0);   p += 2; // xOffset
+	writeUint16LE(p, 16);  p += 2; // width
+	writeUint16LE(p, 0);   p += 2; // yOffset
+	writeUint16LE(p, 16);  p += 2; // height
+
+	for (int y = 0; y < 16; ++y) {
+		*p++ = 18;  // lineLength: xSkip + opcode + 16 literals
+		*p++ = 0;   // xSkip / line xOffset
+		*p++ = 15;  // opcode: cmd=0, len=15 -> next 16 bytes are literals
+		for (int x = 0; x < 16; ++x)
+			*p++ = src[y * 16 + x];
+	}
+
+	assert((uint32)(p - out) == kSpriteSize);
+}
+
+// Convert a paletted CLUT8 surface to RGBA32 using the fixed palette and
+// write it to `path` as a PNG. We do the conversion ourselves rather than
+// letting Image::writePNG synthesise it from a CLUT8 + palette, because
+// only an RGBA conversion path honours per-index alpha (the CLUT8 PNG mode
+// emits a 1-byte/pixel paletted PNG with no transparency).
+static bool writeRGBAPng(const Common::Path &path, const Graphics::Surface &paletted) {
+	Graphics::Surface rgba;
+	rgba.create(paletted.w, paletted.h, Graphics::PixelFormat::createFormatRGBA32());
+
+	for (int y = 0; y < paletted.h; ++y) {
+		const byte *srcRow = (const byte *)paletted.getBasePtr(0, y);
+		uint32 *dstRow = (uint32 *)rgba.getBasePtr(0, y);
+		for (int x = 0; x < paletted.w; ++x) {
+			byte idx = srcRow[x];
+			const RGBA &c = (idx < 5) ? kPalette[idx] : kPalette[0];
+			dstRow[x] = rgba.format.ARGBToColor(c.a, c.r, c.g, c.b);
+		}
+	}
+
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		warning("Scaler test: cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		rgba.free();
+		return false;
+	}
+
+	bool ok = Image::writePNG(out, rgba);
+	out.close();
+	rgba.free();
+
+	if (!ok) {
+		warning("Scaler test: writePNG failed for '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+	}
+	return ok;
+}
+
+} // anonymous namespace
+
+bool ScreenshotHarness::isScalerTestEnabled() {
+	// processSettings() rewrites '-' to '_' before pushing settings into ConfMan,
+	// so the on-the-wire flag --mm-scale-test surfaces as the key mm_scale_test.
+	return ConfMan.hasKey("mm_scale_test") && !ConfMan.get("mm_scale_test").empty();
+}
+
+int ScreenshotHarness::runScalerTest() {
+	if (!isScalerTestEnabled()) {
+		warning("Scaler test: --mm-scale-test=DIR is required");
+		exit(1);
+	}
+
+	Common::Path outDir = Common::Path::fromCommandLine(ConfMan.get("mm_scale_test"));
+
+	// Build the two synthetic 16x16 test patterns.
+	byte vstripes[16 * 16];
+	byte checker[16 * 16];
+	for (int y = 0; y < 16; ++y) {
+		for (int x = 0; x < 16; ++x) {
+			vstripes[y * 16 + x] = (byte)((x % 2) + 1);            // cols alternate 1, 2
+			checker[y * 16 + x]  = (byte)(((x + y) % 2) + 1);      // checkerboard 1/2
+		}
+	}
+
+	struct Pattern {
+		const char *name;
+		const byte *src;
+	};
+	const Pattern patterns[2] = {
+		{ "vstripes16", vstripes },
+		{ "checker16",  checker  },
+	};
+
+	for (int pi = 0; pi < 2; ++pi) {
+		const Pattern &pat = patterns[pi];
+
+		// 1) Encode the pattern as a Xeen RLE sprite and load it.
+		byte encoded[kSpriteSize];
+		encodeSprite(encoded, pat.src);
+
+		StreamSpriteResource sprite;
+		sprite.loadFromBuffer(encoded, kSpriteSize);
+		if (sprite.empty()) {
+			warning("Scaler test: failed to load encoded sprite for '%s'", pat.name);
+			exit(1);
+		}
+
+		// 2) Dump the unscaled input as a 16x16 reference PNG (palette applied
+		//    directly, no draw call). mm5e uses this as its input fixture.
+		{
+			Graphics::Surface input;
+			input.create(16, 16, Graphics::PixelFormat::createFormatCLUT8());
+			for (int y = 0; y < 16; ++y) {
+				byte *row = (byte *)input.getBasePtr(0, y);
+				memcpy(row, pat.src + y * 16, 16);
+			}
+			Common::Path p = outDir.appendComponent(Common::String::format("%s_input.png", pat.name));
+			if (!writeRGBAPng(p, input)) {
+				input.free();
+				exit(1);
+			}
+			input.free();
+		}
+
+		// 3) Render at every scale 0..15 to a 64x64 transparent canvas.
+		for (int scale = 0; scale < 16; ++scale) {
+			Shared::Xeen::XSurface canvas(64, 64);
+			canvas.clear(0); // palette idx 0 == transparent in our fixed palette
+
+			// Reach into SpriteResource via a base-class pointer so we hit the
+			// public 5-arg overload (the Xeen subclass' override forces
+			// scale=0; we want the unmodified shared draw()).
+			const Shared::Xeen::SpriteResource *base = &sprite;
+			base->draw(canvas, /*frame*/ 0, Common::Point(8, 8),
+				/*flags*/ 0, /*scale*/ scale);
+
+			Common::Path p = outDir.appendComponent(
+				Common::String::format("%s_scale%02d.png", pat.name, scale));
+			if (!writeRGBAPng(p, canvas.rawSurface()))
+				exit(1);
+		}
+	}
+
+	debug("Scaler test: wrote 34 PNGs to %s",
+		outDir.toString(Common::Path::kNativeSeparator).c_str());
 	exit(0);
 }
 
