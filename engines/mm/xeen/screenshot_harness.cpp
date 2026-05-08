@@ -28,8 +28,10 @@
 
 #include <stdlib.h>
 
+#include "common/array.h"
 #include "common/config-manager.h"
 #include "common/file.h"
+#include "common/fs.h"
 #include "common/memstream.h"
 #include "common/str.h"
 #include "common/textconsole.h"
@@ -418,6 +420,234 @@ static bool writeRGBAPng(const Common::Path &path, const Graphics::Surface &pale
 
 } // anonymous namespace
 
+// ---------------------------------------------------------------------------
+// Tree input handling
+//
+// The synthetic 16x16 patterns above only exercise a sub-slice of the scaler's
+// behaviour: xOffset=0, yOffset=0, width <= 32 (so cmd 0 fits in a single
+// opcode), and a 5-color palette. The tree sprite (010.obj cell 0) hits a
+// non-zero yOffset (=38), width=250 (requiring multiple opcodes per row) and
+// real game colors. Adding it as a third reference closes that gap.
+//
+// We accept the tree as an externally-provided RGBA PNG (the user generates it
+// once from real game data) rather than reading the .obj archive here, which
+// would drag in a full game-data path for a single fixture. The PNG round-trips
+// cleanly because:
+//   * Each pixel is either fully transparent (alpha=0) or fully opaque.
+//   * SpriteResource::draw operates on a CLUT8 surface keyed by palette index;
+//     we build a per-input dynamic palette mapping each unique opaque RGBA
+//     color to a palette index 1..N (index 0 reserved for transparent), encode
+//     the sprite using these indices, draw, and convert the resulting CLUT8
+//     surface back to RGBA via the same map.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct TreeRGBA {
+	uint8 r, g, b, a;
+	bool operator==(const TreeRGBA &o) const {
+		return r == o.r && g == o.g && b == o.b && a == o.a;
+	}
+};
+
+// Decode the tree input PNG into a CLUT8 buffer + dynamic palette.
+//
+// On success, fills @p outPixels with width*height palette indices (0 for
+// transparent pixels, 1..palette.size()-1 for opaque colors), populates
+// @p outPalette[0..N] with the corresponding RGBA values (entry 0 is the
+// transparent sentinel) and returns true.
+static bool decodeTreeInput(const Common::Path &inputPath,
+                            uint16 &outWidth, uint16 &outHeight,
+                            Common::Array<byte> &outPixels,
+                            Common::Array<TreeRGBA> &outPalette) {
+	Common::FSNode node(inputPath);
+	if (!node.exists())
+		return false;
+
+	Common::File file;
+	if (!file.open(node)) {
+		warning("Scaler test: cannot open '%s' for reading",
+			inputPath.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	Image::PNGDecoder decoder;
+	if (!decoder.loadStream(file)) {
+		warning("Scaler test: PNG decode failed for '%s'",
+			inputPath.toString(Common::Path::kNativeSeparator).c_str());
+		file.close();
+		return false;
+	}
+	file.close();
+
+	const Graphics::Surface *surf = decoder.getSurface();
+	if (!surf || surf->w <= 0 || surf->h <= 0) {
+		warning("Scaler test: tree input has empty surface");
+		return false;
+	}
+	if (surf->format.bytesPerPixel != 4) {
+		warning("Scaler test: tree input must be 32-bit RGBA (got bpp=%u)",
+			(uint)surf->format.bytesPerPixel);
+		return false;
+	}
+
+	outWidth = (uint16)surf->w;
+	outHeight = (uint16)surf->h;
+	outPixels.resize((uint32)surf->w * (uint32)surf->h);
+	outPalette.clear();
+	// Index 0 is always the transparent sentinel; its RGB is don't-care but
+	// we keep it consistent with the existing fixture palette (a=0 for clarity).
+	TreeRGBA transparent = { 0, 0, 0, 0 };
+	outPalette.push_back(transparent);
+
+	const Graphics::PixelFormat &fmt = surf->format;
+
+	for (int y = 0; y < surf->h; ++y) {
+		const uint32 *row = (const uint32 *)surf->getBasePtr(0, y);
+		byte *dstRow = &outPixels[(uint32)y * (uint32)surf->w];
+		for (int x = 0; x < surf->w; ++x) {
+			uint8 r, g, b, a;
+			fmt.colorToARGB(row[x], a, r, g, b);
+
+			if (a == 0) {
+				dstRow[x] = 0;
+				continue;
+			}
+			TreeRGBA c = { r, g, b, a };
+
+			// Linear scan over the small (~tens) palette is fine; total cost
+			// is bounded and dwarfed by the libpng decode itself.
+			byte found = 0;
+			for (uint i = 1; i < outPalette.size(); ++i) {
+				if (outPalette[i] == c) {
+					found = (byte)i;
+					break;
+				}
+			}
+			if (found == 0) {
+				if (outPalette.size() > 255) {
+					warning("Scaler test: tree input has >255 unique opaque colors");
+					return false;
+				}
+				outPalette.push_back(c);
+				found = (byte)(outPalette.size() - 1);
+			}
+			dstRow[x] = found;
+		}
+	}
+	return true;
+}
+
+// Encode a paletted (CLUT8) buffer of arbitrary width/height as a Xeen RLE
+// sprite with the supplied cell-header offsets. Each row is emitted as a
+// sequence of literal-run opcodes. The decoder treats cmd 0 and cmd 1
+// identically (both fall through to the same `for (i=0; i < opcode + 1; ...)`
+// payload loop), so we can use cmd 1 with len=31 (opcode=0x3F) to fit 64
+// pixels per opcode, which is what the lineLength byte budget requires:
+//
+//   * lineLength is a single byte (max 255).
+//   * lineLength counts the xSkip byte + every opcode byte + every payload
+//     byte for the row (the decoder's per-row inner loop starts byteCount=1
+//     to account for the just-consumed xSkip and stops when it reaches
+//     lineLength).
+//   * width=250 with 32-pixel cmd-0 opcodes => 1 + 8*1 + 250 = 259 bytes,
+//     overflowing lineLength.
+//   * width=250 with 64-pixel cmd-1 opcodes => 1 + 4*1 + 250 = 255 bytes
+//     exactly. Fits.
+static void encodeTreeSprite(Common::Array<byte> &out,
+                             const Common::Array<byte> &pixels,
+                             uint16 width, uint16 height,
+                             uint16 xOffset, uint16 yOffset) {
+	out.clear();
+
+	auto writeUint16LEArr = [](Common::Array<byte> &dst, uint16 v) {
+		dst.push_back((byte)(v & 0xFF));
+		dst.push_back((byte)(v >> 8));
+	};
+
+	// Index header (6 bytes) + cell header (8 bytes) precede the row payload.
+	writeUint16LEArr(out, 1);  // frame count
+	writeUint16LEArr(out, 6);  // cell-1 offset (immediately after the index)
+	writeUint16LEArr(out, 0);  // cell-2 offset (no foreground overlay)
+
+	// Cell header.
+	writeUint16LEArr(out, xOffset);
+	writeUint16LEArr(out, width);
+	writeUint16LEArr(out, yOffset);
+	writeUint16LEArr(out, height);
+
+	// Per-row encoding. Each opcode's payload is `opcode + 1` pixels (the
+	// decoder reads cmd 0 and cmd 1 with the same payload formula); we cap
+	// chunks at 64 by setting cmd 1 / len 31 (opcode = 0x3F).
+	for (uint16 y = 0; y < height; ++y) {
+		const byte *rowSrc = &pixels[(uint32)y * (uint32)width];
+
+		Common::Array<byte> rowBody;
+		rowBody.push_back(0); // xSkip / line xOffset
+		uint16 remaining = width;
+		uint16 col = 0;
+		while (remaining > 0) {
+			uint16 chunk = (remaining > 64) ? 64 : remaining;
+			// opcode encodes payload count - 1: cmd 1 / len = chunk - 33 if
+			// chunk > 32, else cmd 0 / len = chunk - 1.
+			byte opcode;
+			if (chunk > 32)
+				opcode = (byte)(0x20 | ((chunk - 1) & 0x1F)); // cmd 1
+			else
+				opcode = (byte)(chunk - 1);                   // cmd 0
+			rowBody.push_back(opcode);
+			for (uint16 i = 0; i < chunk; ++i)
+				rowBody.push_back(rowSrc[col + i]);
+			col += chunk;
+			remaining -= chunk;
+		}
+
+		assert(rowBody.size() <= 0xFF);
+		out.push_back((byte)rowBody.size());
+		for (uint i = 0; i < rowBody.size(); ++i)
+			out.push_back(rowBody[i]);
+	}
+}
+
+// Convert a CLUT8 surface drawn by SpriteResource::draw back to RGBA using
+// the tree's dynamic palette, then write as a PNG.
+static bool writeTreeRGBAPng(const Common::Path &path,
+                             const Graphics::Surface &paletted,
+                             const Common::Array<TreeRGBA> &palette) {
+	Graphics::Surface rgba;
+	rgba.create(paletted.w, paletted.h, Graphics::PixelFormat::createFormatRGBA32());
+
+	for (int y = 0; y < paletted.h; ++y) {
+		const byte *srcRow = (const byte *)paletted.getBasePtr(0, y);
+		uint32 *dstRow = (uint32 *)rgba.getBasePtr(0, y);
+		for (int x = 0; x < paletted.w; ++x) {
+			byte idx = srcRow[x];
+			TreeRGBA c = (idx < palette.size()) ? palette[idx] : palette[0];
+			dstRow[x] = rgba.format.ARGBToColor(c.a, c.r, c.g, c.b);
+		}
+	}
+
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		warning("Scaler test: cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		rgba.free();
+		return false;
+	}
+
+	bool ok = Image::writePNG(out, rgba);
+	out.close();
+	rgba.free();
+
+	if (!ok) {
+		warning("Scaler test: writePNG failed for '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+	}
+	return ok;
+}
+
+} // anonymous namespace
+
 int ScreenshotHarness::runScalerTest(const Common::Path &outDir) {
 	if (outDir.empty()) {
 		warning("Scaler test: --mm-scale-test=DIR is required");
@@ -493,7 +723,65 @@ int ScreenshotHarness::runScalerTest(const Common::Path &outDir) {
 		}
 	}
 
-	debug("Scaler test: wrote 34 PNGs to %s",
+	int totalWritten = 34;
+
+	// Optional third reference: real game-data tree sprite (010.obj cell 0).
+	// Skipped silently if the input PNG isn't present, which keeps the
+	// existing 34-PNG output stable for callers that don't care.
+	{
+		Common::Path treeInputPath = outDir.appendComponent("tree_obj010_input.png");
+		Common::Array<byte> treePixels;
+		Common::Array<TreeRGBA> treePalette;
+		uint16 treeW = 0, treeH = 0;
+
+		if (decodeTreeInput(treeInputPath, treeW, treeH, treePixels, treePalette)) {
+			if (treeW != 250 || treeH != 109) {
+				warning("Scaler test: tree input is %ux%u, expected 250x109",
+					treeW, treeH);
+				exit(1);
+			}
+
+			// Cell-header values come from the actual 010.obj cell 0 in the
+			// game data; the input PNG was extracted with these in mind.
+			const uint16 kTreeXOffset = 0;
+			const uint16 kTreeYOffset = 38;
+
+			Common::Array<byte> encoded;
+			encodeTreeSprite(encoded, treePixels, treeW, treeH,
+				kTreeXOffset, kTreeYOffset);
+
+			StreamSpriteResource sprite;
+			sprite.loadFromBuffer(&encoded[0], (uint32)encoded.size());
+			if (sprite.empty()) {
+				warning("Scaler test: failed to load encoded tree sprite");
+				exit(1);
+			}
+
+			for (int scale = 0; scale < 16; ++scale) {
+				// 320x200 is the original VGA frame; large enough to hold
+				// the unscaled 250-wide tree at destPos=(8,8) (which places
+				// content at (8, 8+38)..(258, 155) after the cell offsets).
+				Shared::Xeen::XSurface canvas(320, 200);
+				canvas.clear(0);
+
+				// Use the public 5-arg overload, which internally calls the
+				// 6-arg form with bounds = Rect(0, 0, dest.w, dest.h). Since
+				// we just constructed canvas as 320x200, that resolves to the
+				// bounds the spec asks for.
+				const Shared::Xeen::SpriteResource *base = &sprite;
+				base->draw(canvas, /*frame*/ 0, Common::Point(8, 8),
+					/*flags*/ 0, /*scale*/ scale);
+
+				Common::Path p = outDir.appendComponent(
+					Common::String::format("tree_obj010_scale%02d.png", scale));
+				if (!writeTreeRGBAPng(p, canvas.rawSurface(), treePalette))
+					exit(1);
+				++totalWritten;
+			}
+		}
+	}
+
+	debug("Scaler test: wrote %d PNGs to %s", totalWritten,
 		outDir.toString(Common::Path::kNativeSeparator).c_str());
 	exit(0);
 }
