@@ -122,6 +122,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 
 	out.noMonsters = ConfMan.hasKey("no_actors") && ConfMan.getBool("no_actors");
 	out.noBorderAnims = ConfMan.hasKey("mm_no_border_anims") && ConfMan.getBool("mm_no_border_anims");
+	out.logSlots = ConfMan.hasKey("mm_log_slots") && ConfMan.getBool("mm_log_slots");
 
 	return true;
 }
@@ -240,6 +241,13 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	// of back.raw around the draw3d call.
 	if (s.noBorderAnims)
 		vm->_interface->_suppressBorderAnims = true;
+
+	// Enable per-slot diagnostic logging in InterfaceScene::setIndoorsObjects.
+	// Emits a single SLOT_FILL warning line for every assignment into the 12
+	// indoor object draw slots. Used by the mm5e regression harness to compare
+	// scene assembly against its own renderer.
+	if (s.logSlots)
+		vm->_interface->_logSlotFills = true;
 
 	// Run the same first-frame setup that XeenEngine::play() runs.
 	vm->_mode = MODE_INTERACTIVE;

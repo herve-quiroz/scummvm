@@ -171,6 +171,12 @@ public:
 	bool _charsShooting;
 	bool _openDoor;
 	bool _isAttacking;
+	// Harness-only: when true, setIndoorsObjects() emits a SLOT_FILL warning
+	// line for each MazeObject it assigns into one of the 12 indoor object
+	// draw slots. Used by the mm5e regression harness to compare which
+	// objects ScummVM places where against its own scene assembly. No effect
+	// on normal gameplay.
+	bool _logSlotFills = false;
 public:
 	InterfaceScene(XeenEngine *vm);
 

@@ -57,9 +57,10 @@ public:
 		uint8 side; // 0 = Clouds, 1 = Dark Side
 		bool noMonsters;
 		bool noBorderAnims; // suppress animated border UI overlays in assembleBorder()
+		bool logSlots; // emit SLOT_FILL warning lines from setIndoorsObjects()
 
 		Settings() : mazeId(0), cellX(0), cellY(0), facing(DIR_NORTH), side(0),
-			noMonsters(false), noBorderAnims(false) {}
+			noMonsters(false), noBorderAnims(false), logSlots(false) {}
 	};
 
 	/**

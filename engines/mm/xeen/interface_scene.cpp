@@ -2700,6 +2700,12 @@ void InterfaceScene::setIndoorsObjects() {
 			if (mazeObject._flipped)
 				_indoorList._objects0._flags |= SPRFLAG_HORIZ_FLIPPED;
 			_objNumber = idx;
+			if (_logSlotFills)
+				warning("SLOT_FILL slot=149 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+					idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+					mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+					Res.INDOOR_OBJECT_X[listOffset][0], Res.MAP_OBJECT_Y[listOffset][0],
+					_indoorList._data[149]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 		}
 
 		// Position 2
@@ -2713,6 +2719,12 @@ void InterfaceScene::setIndoorsObjects() {
 			_indoorList._objects1._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 			if (mazeObject._flipped)
 				_indoorList._objects1._flags |= SPRFLAG_HORIZ_FLIPPED;
+			if (_logSlotFills)
+				warning("SLOT_FILL slot=125 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+					idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+					mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+					Res.INDOOR_OBJECT_X[listOffset][1], Res.MAP_OBJECT_Y[listOffset][1],
+					_indoorList._data[125]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 		}
 
 		// Position 3
@@ -2730,6 +2742,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects2._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects2._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=126 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][2], Res.MAP_OBJECT_Y[listOffset][2],
+						_indoorList._data[126]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2748,6 +2766,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects3._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects3._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=127 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][3], Res.MAP_OBJECT_Y[listOffset][3],
+						_indoorList._data[127]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2762,6 +2786,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects4._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects4._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=97 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][4], Res.MAP_OBJECT_Y[listOffset][4],
+						_indoorList._data[97]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2781,6 +2811,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects5._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects5._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=98 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][5], Res.MAP_OBJECT_Y[listOffset][5],
+						_indoorList._data[98]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2800,6 +2836,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects6._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects6._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=99 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][6], Res.MAP_OBJECT_Y[listOffset][6],
+						_indoorList._data[99]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2814,6 +2856,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects7._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects7._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=55 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][7], Res.MAP_OBJECT_Y[listOffset][7],
+						_indoorList._data[55]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2833,6 +2881,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects8._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects8._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=56 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][8], Res.MAP_OBJECT_Y[listOffset][8],
+						_indoorList._data[56]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2852,6 +2906,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects9._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects9._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=58 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][10], Res.MAP_OBJECT_Y[listOffset][10],
+						_indoorList._data[58]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2871,6 +2931,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects10._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects10._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=57 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][9], Res.MAP_OBJECT_Y[listOffset][9],
+						_indoorList._data[57]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 
@@ -2890,6 +2956,12 @@ void InterfaceScene::setIndoorsObjects() {
 				_indoorList._objects11._flags &= ~SPRFLAG_HORIZ_FLIPPED;
 				if (mazeObject._flipped)
 					_indoorList._objects11._flags |= SPRFLAG_HORIZ_FLIPPED;
+				if (_logSlotFills)
+					warning("SLOT_FILL slot=59 obj_idx=%u obj_pos=(%d,%d) obj_dir=%d sprite_id=%d frame=%d flipped=%s dest_x=%d dest_y=%d scale=%d listOffset=%d party=(%d,%d) party_dir=%d",
+						idx, mazeObject._position.x, mazeObject._position.y, (int)mazeObject._direction,
+						mazeObject._spriteId, mazeObject._frame, mazeObject._flipped ? "true" : "false",
+						Res.INDOOR_OBJECT_X[listOffset][11], Res.MAP_OBJECT_Y[listOffset][11],
+						_indoorList._data[59]._scale, listOffset, mazePos.x, mazePos.y, (int)dir);
 			}
 		}
 	}
