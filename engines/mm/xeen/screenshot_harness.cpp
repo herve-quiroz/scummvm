@@ -729,9 +729,26 @@ int ScreenshotHarness::runScalerTest(const Common::Path &outDir) {
 			if (!writeRGBAPng(p, canvas.rawSurface()))
 				exit(1);
 		}
+
+		// 4) Same loop, but with SPRFLAG_HORIZ_FLIPPED set so we have a
+		//    byte-for-byte oracle for the right-to-left tempLine path.
+		for (int scale = 0; scale < 16; ++scale) {
+			Shared::Xeen::XSurface canvas(64, 64);
+			canvas.clear(0);
+
+			const Shared::Xeen::SpriteResource *base = &sprite;
+			base->draw(canvas, /*frame*/ 0, Common::Point(8, 8),
+				/*flags*/ Shared::Xeen::SPRFLAG_HORIZ_FLIPPED,
+				/*scale*/ scale);
+
+			Common::Path p = outDir.appendComponent(
+				Common::String::format("%s_flipped_scale%02d.png", pat.name, scale));
+			if (!writeRGBAPng(p, canvas.rawSurface()))
+				exit(1);
+		}
 	}
 
-	int totalWritten = 34;
+	int totalWritten = 34 + 32;
 
 	// Optional third reference: real game-data tree sprite (010.obj cell 0).
 	// Skipped silently if the input PNG isn't present, which keeps the
@@ -782,6 +799,23 @@ int ScreenshotHarness::runScalerTest(const Common::Path &outDir) {
 
 				Common::Path p = outDir.appendComponent(
 					Common::String::format("tree_obj010_scale%02d.png", scale));
+				if (!writeTreeRGBAPng(p, canvas.rawSurface(), treePalette))
+					exit(1);
+				++totalWritten;
+			}
+
+			// Flipped variants of the tree, same scale loop.
+			for (int scale = 0; scale < 16; ++scale) {
+				Shared::Xeen::XSurface canvas(320, 200);
+				canvas.clear(0);
+
+				const Shared::Xeen::SpriteResource *base = &sprite;
+				base->draw(canvas, /*frame*/ 0, Common::Point(8, 8),
+					/*flags*/ Shared::Xeen::SPRFLAG_HORIZ_FLIPPED,
+					/*scale*/ scale);
+
+				Common::Path p = outDir.appendComponent(
+					Common::String::format("tree_obj010_flipped_scale%02d.png", scale));
 				if (!writeTreeRGBAPng(p, canvas.rawSurface(), treePalette))
 					exit(1);
 				++totalWritten;
