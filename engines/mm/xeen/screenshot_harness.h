@@ -58,9 +58,11 @@ public:
 		bool noMonsters;
 		bool noBorderAnims; // suppress animated border UI overlays in assembleBorder()
 		bool logSlots; // emit SLOT_FILL warning lines from setIndoorsObjects()
+		bool pinAnimFrames; // pin each animated object to its cycle-start frame for determinism
 
 		Settings() : mazeId(0), cellX(0), cellY(0), facing(DIR_NORTH), side(0),
-			noMonsters(false), noBorderAnims(false), logSlots(false) {}
+			noMonsters(false), noBorderAnims(false), logSlots(false),
+			pinAnimFrames(false) {}
 	};
 
 	/**

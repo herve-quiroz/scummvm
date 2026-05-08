@@ -169,6 +169,7 @@ static const char HELP_STRING4[] =
 	"  --no-actors              Suppress actor (e.g. monster) rendering in the harness frame.\n"
 	"  --mm-no-border-anims     [MM/Xeen] Suppress the five animated border UI overlays in the harness frame.\n"
 	"  --mm-log-slots           [MM/Xeen] Log SLOT_FILL diagnostics for every indoor object slot assignment.\n"
+	"  --mm-pin-anim-frames     [MM/Xeen] Pin each animated object to its cycle-start frame for deterministic captures.\n"
 	"  --mm-scale-test=DIR      [MM/Xeen] Dump SpriteResource scaler reference PNGs to DIR and exit.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
@@ -1124,6 +1125,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION_BOOL("mm-log-slots")
+			END_OPTION
+
+			DO_LONG_OPTION_BOOL("mm-pin-anim-frames")
 			END_OPTION
 
 			DO_LONG_OPTION("mm-scale-test")

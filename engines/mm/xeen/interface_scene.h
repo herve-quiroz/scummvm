@@ -177,6 +177,12 @@ public:
 	// objects ScummVM places where against its own scene assembly. No effect
 	// on normal gameplay.
 	bool _logSlotFills = false;
+	// Harness-only: when true, drawScene() pins each animated MazeObject's
+	// _frame to the start of its animation cycle (animEntry._frame1) on every
+	// call, instead of cycling from frame1 to frame2. This makes captured
+	// reference frames deterministic regardless of how many times draw3d runs
+	// during the harness flow. No effect on normal gameplay.
+	bool _pinAnimFrames = false;
 public:
 	InterfaceScene(XeenEngine *vm);
 

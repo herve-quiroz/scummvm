@@ -123,6 +123,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	out.noMonsters = ConfMan.hasKey("no_actors") && ConfMan.getBool("no_actors");
 	out.noBorderAnims = ConfMan.hasKey("mm_no_border_anims") && ConfMan.getBool("mm_no_border_anims");
 	out.logSlots = ConfMan.hasKey("mm_log_slots") && ConfMan.getBool("mm_log_slots");
+	out.pinAnimFrames = ConfMan.hasKey("mm_pin_anim_frames") && ConfMan.getBool("mm_pin_anim_frames");
 
 	return true;
 }
@@ -248,6 +249,13 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	// scene assembly against its own renderer.
 	if (s.logSlots)
 		vm->_interface->_logSlotFills = true;
+
+	// Pin each animated MazeObject to its cycle-start frame on every
+	// drawScene() call. With this on, repeated draw3d invocations produce
+	// byte-identical captures, so reference PNGs don't depend on how many
+	// times the harness flow draws before screenshotting.
+	if (s.pinAnimFrames)
+		vm->_interface->_pinAnimFrames = true;
 
 	// Run the same first-frame setup that XeenEngine::play() runs.
 	vm->_mode = MODE_INTERACTIVE;

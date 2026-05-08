@@ -426,7 +426,12 @@ void InterfaceScene::drawScene() {
 		AnimationEntry &animEntry = map._animationInfo[mazeObject._spriteId];
 		int directionIndex = Res.DIRECTION_ANIM_POSITIONS[mazeObject._direction][partyDirection];
 
-		if (_isAnimReset) {
+		if (_pinAnimFrames) {
+			// Harness-only: force every animated object to its cycle-start
+			// frame on every drawScene() invocation, so repeated draw3d
+			// calls produce byte-identical captures.
+			mazeObject._frame = animEntry._frame1._frames[directionIndex];
+		} else if (_isAnimReset) {
 			mazeObject._frame = animEntry._frame1._frames[directionIndex];
 		} else {
 			++mazeObject._frame;
