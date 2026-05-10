@@ -211,6 +211,19 @@ public:
 	 */
 	void perform();
 
+	/**
+	 * Harness-only: dispatch a single synthetic key-event through the same
+	 * movement / interaction code paths perform() uses, without polling or
+	 * blocking. @p buttonValue must be one of: KEYCODE_UP, KEYCODE_DOWN,
+	 * KEYCODE_LEFT, KEYCODE_RIGHT, KEYCODE_SPACE, or the strafe variants
+	 * (KBD_CTRL << 16) | KEYCODE_LEFT / KEYCODE_RIGHT. Anything else is a
+	 * no-op. Movement that fails checkMoveDirection() leaves the position
+	 * unchanged but still advances internal state where the original
+	 * keyboard handler would (e.g. plays the blocked SFX, which is silent
+	 * under the audio-disabled harness invocation).
+	 */
+	void replayHarnessInput(int buttonValue);
+
 	void rest();
 
 	/**

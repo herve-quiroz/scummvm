@@ -709,6 +709,152 @@ void Interface::perform() {
 	}
 }
 
+void Interface::replayHarnessInput(int buttonValue) {
+	// Mirrors the relevant case branches of perform() inline so the harness
+	// can drive a synthetic input through exactly the same code paths the
+	// keyboard handlers use, without polling the event manager. Only movement
+	// and interact (Space) are supported; all other keys are ignored.
+	Map &map = *_vm->_map;
+	Party &party = *_vm->_party;
+	Scripts &scripts = *_vm->_scripts;
+
+	_buttonValue = buttonValue;
+
+	// SPACE: cell-script interact. Replicates the SPACE prelude in perform()
+	// (mazeLookup + grate handling) and Scripts::checkEvents, then falls
+	// through to the wait-one-turn branch below.
+	if (buttonValue == Common::KEYCODE_SPACE) {
+		int lookupId = map.mazeLookup(party._mazePosition,
+			Res.WALL_SHIFTS[party._mazeDirection][2]);
+
+		bool eventsFlag = true;
+		switch (lookupId) {
+		case 1:
+			if (!map._isOutdoors)
+				eventsFlag = !scripts.openGrate(13, 1);
+			break;
+		case 6:
+			if (!map._isOutdoors)
+				eventsFlag = !scripts.openGrate(9, 0);
+			break;
+		case 9:
+			if (!map._isOutdoors)
+				eventsFlag = !scripts.openGrate(6, 0);
+			break;
+		case 13:
+			if (!map._isOutdoors)
+				eventsFlag = !scripts.openGrate(1, 1);
+			break;
+		default:
+			break;
+		}
+		if (eventsFlag) {
+			scripts.checkEvents();
+			if (_vm->shouldExit())
+				return;
+		} else {
+			clearEvents();
+		}
+	}
+
+	switch (buttonValue) {
+	case Common::KEYCODE_SPACE:
+		// Wait one turn (same as KEYCODE_w in perform()).
+		chargeStep();
+		_vm->_combat->moveMonsters();
+		_upDoorText = false;
+		_flipDefaultGround = !_flipDefaultGround;
+		_flipGround = !_flipGround;
+		stepTime();
+		break;
+
+	case (Common::KBD_CTRL << 16) | Common::KEYCODE_LEFT:
+		if (checkMoveDirection((Common::KBD_CTRL << 16) | Common::KEYCODE_LEFT)) {
+			switch (party._mazeDirection) {
+			case DIR_NORTH: --party._mazePosition.x; break;
+			case DIR_SOUTH: ++party._mazePosition.x; break;
+			case DIR_EAST:  ++party._mazePosition.y; break;
+			case DIR_WEST:  --party._mazePosition.y; break;
+			default: break;
+			}
+			chargeStep();
+			_isAnimReset = true;
+			party._mazeDirection = (Direction)((int)party._mazeDirection & 3);
+			_flipSky = !_flipSky;
+			stepTime();
+		}
+		break;
+
+	case (Common::KBD_CTRL << 16) | Common::KEYCODE_RIGHT:
+		if (checkMoveDirection((Common::KBD_CTRL << 16) | Common::KEYCODE_RIGHT)) {
+			switch (party._mazeDirection) {
+			case DIR_NORTH: ++party._mazePosition.x; break;
+			case DIR_SOUTH: --party._mazePosition.x; break;
+			case DIR_EAST:  --party._mazePosition.y; break;
+			case DIR_WEST:  ++party._mazePosition.y; break;
+			default: break;
+			}
+			chargeStep();
+			_isAnimReset = true;
+			party._mazeDirection = (Direction)((int)party._mazeDirection & 3);
+			_flipSky = !_flipSky;
+			stepTime();
+		}
+		break;
+
+	case Common::KEYCODE_LEFT:
+		party._mazeDirection = (Direction)((int)party._mazeDirection - 1);
+		_isAnimReset = true;
+		party._mazeDirection = (Direction)((int)party._mazeDirection & 3);
+		_flipSky = !_flipSky;
+		stepTime();
+		break;
+
+	case Common::KEYCODE_RIGHT:
+		party._mazeDirection = (Direction)((int)party._mazeDirection + 1);
+		_isAnimReset = true;
+		party._mazeDirection = (Direction)((int)party._mazeDirection & 3);
+		_flipSky = !_flipSky;
+		stepTime();
+		break;
+
+	case Common::KEYCODE_UP:
+		if (checkMoveDirection(Common::KEYCODE_UP)) {
+			switch (party._mazeDirection) {
+			case DIR_NORTH: ++party._mazePosition.y; break;
+			case DIR_SOUTH: --party._mazePosition.y; break;
+			case DIR_EAST:  ++party._mazePosition.x; break;
+			case DIR_WEST:  --party._mazePosition.x; break;
+			default: break;
+			}
+			chargeStep();
+			stepTime();
+		}
+		break;
+
+	case Common::KEYCODE_DOWN:
+		if (checkMoveDirection(Common::KEYCODE_DOWN)) {
+			switch (party._mazeDirection) {
+			case DIR_NORTH: --party._mazePosition.y; break;
+			case DIR_SOUTH: ++party._mazePosition.y; break;
+			case DIR_EAST:  --party._mazePosition.x; break;
+			case DIR_WEST:  ++party._mazePosition.x; break;
+			default: break;
+			}
+			chargeStep();
+			stepTime();
+		}
+		break;
+
+	default:
+		break;
+	}
+
+	// Clear _buttonValue so callers that re-poll (e.g. a subsequent
+	// real perform() invocation) don't re-dispatch our synthetic input.
+	_buttonValue = 0;
+}
+
 void Interface::chargeStep() {
 	if (!_vm->_party->_dead) {
 		_vm->_party->changeTime(_vm->_map->_isOutdoors ? 10 : 1);

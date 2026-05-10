@@ -170,6 +170,10 @@ static const char HELP_STRING4[] =
 	"  --mm-no-border-anims     [MM/Xeen] Suppress the five animated border UI overlays in the harness frame.\n"
 	"  --mm-log-slots           [MM/Xeen] Log SLOT_FILL diagnostics for every indoor object slot assignment.\n"
 	"  --mm-pin-anim-frames     [MM/Xeen] Pin each animated object to its cycle-start frame for deterministic captures.\n"
+	"  --mm-input-script=STR    [MM/Xeen] Replay a sequence of player inputs (F/B/L/R/</>/S/.), capturing\n"
+	"                           one PNG per step. Whitespace and commas in STR are ignored.\n"
+	"  --mm-screenshot-prefix=PATH  [MM/Xeen] Path prefix for per-step PNGs written by --mm-input-script.\n"
+	"                           Files are <prefix>.NNN.png plus <prefix>.trace.txt.\n"
 	"  --mm-scale-test=DIR      [MM/Xeen] Dump SpriteResource scaler reference PNGs to DIR and exit.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
@@ -1128,6 +1132,12 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION_BOOL("mm-pin-anim-frames")
+			END_OPTION
+
+			DO_LONG_OPTION("mm-input-script")
+			END_OPTION
+
+			DO_LONG_OPTION("mm-screenshot-prefix")
 			END_OPTION
 
 			DO_LONG_OPTION("mm-scale-test")

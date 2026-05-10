@@ -59,6 +59,14 @@ public:
 		bool noBorderAnims; // suppress animated border UI overlays in assembleBorder()
 		bool logSlots; // emit SLOT_FILL warning lines from setIndoorsObjects()
 		bool pinAnimFrames; // pin each animated object to its cycle-start frame for determinism
+		// Input-replay mode. When inputScript is non-empty, the harness
+		// captures one PNG per step (initial + one after each input char)
+		// to <screenshotPrefix>.NNN.png, plus a sidecar trace at
+		// <screenshotPrefix>.trace.txt. screenshotPath (--screenshot=)
+		// remains optional and gets the FINAL frame copied to it for
+		// backward compatibility with single-shot callers.
+		Common::String inputScript;
+		Common::String screenshotPrefix;
 
 		Settings() : mazeId(0), cellX(0), cellY(0), facing(DIR_NORTH), side(0),
 			noMonsters(false), noBorderAnims(false), logSlots(false),

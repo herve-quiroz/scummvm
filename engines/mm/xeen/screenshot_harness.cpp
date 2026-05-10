@@ -53,7 +53,10 @@ namespace MM {
 namespace Xeen {
 
 bool ScreenshotHarness::isEnabled() {
-	return ConfMan.hasKey("screenshot") && !ConfMan.get("screenshot").empty();
+	bool hasScreenshot = ConfMan.hasKey("screenshot") && !ConfMan.get("screenshot").empty();
+	bool hasPrefix = ConfMan.hasKey("mm_screenshot_prefix") &&
+		!ConfMan.get("mm_screenshot_prefix").empty();
+	return hasScreenshot || hasPrefix;
 }
 
 static bool parseFacing(const Common::String &raw, Direction &out) {
@@ -69,11 +72,23 @@ static bool parseFacing(const Common::String &raw, Direction &out) {
 }
 
 bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
-	if (!ConfMan.hasKey("screenshot") || ConfMan.get("screenshot").empty()) {
-		err = "--screenshot=PATH is required";
+	bool hasScreenshot = ConfMan.hasKey("screenshot") && !ConfMan.get("screenshot").empty();
+	bool hasPrefix = ConfMan.hasKey("mm_screenshot_prefix") &&
+		!ConfMan.get("mm_screenshot_prefix").empty();
+	if (!hasScreenshot && !hasPrefix) {
+		err = "--screenshot=PATH or --mm-screenshot-prefix=PATH is required";
 		return false;
 	}
-	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
+	if (hasScreenshot)
+		out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
+	if (hasPrefix)
+		out.screenshotPrefix = ConfMan.get("mm_screenshot_prefix");
+	if (ConfMan.hasKey("mm_input_script"))
+		out.inputScript = ConfMan.get("mm_input_script");
+	if (!out.inputScript.empty() && !hasPrefix) {
+		err = "--mm-input-script requires --mm-screenshot-prefix=PATH";
+		return false;
+	}
 
 	if (!ConfMan.hasKey("level")) {
 		err = "--level=N is required";
@@ -128,12 +143,84 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	return true;
 }
 
+// Write the current screen surface to @p path as a paletted PNG. Returns
+// true on success. Reads the palette from the engine's copy rather than the
+// SDL backend so it works under the dummy/offscreen drivers used for headless
+// captures.
+static bool writeFramePng(XeenEngine *vm, const Common::Path &path) {
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		warning("Screenshot harness: cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	byte palette[256 * 3];
+	vm->_screen->getMainPalette(palette);
+
+	if (!Image::writePNG(out, vm->_screen->rawSurface(), palette)) {
+		warning("Screenshot harness: writePNG failed for '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		out.close();
+		return false;
+	}
+
+	out.close();
+	return true;
+}
+
+// Map an input-script character to the Common::KeyCode-style buttonValue the
+// Interface dispatcher expects, or 0 for unknown / no-op chars.
+static int charToButtonValue(char c) {
+	switch (c) {
+	case 'F': case 'f': return Common::KEYCODE_UP;
+	case 'B': case 'b': return Common::KEYCODE_DOWN;
+	case 'L': case 'l': return Common::KEYCODE_LEFT;
+	case 'R': case 'r': return Common::KEYCODE_RIGHT;
+	case '<':           return (Common::KBD_CTRL << 16) | Common::KEYCODE_LEFT;
+	case '>':           return (Common::KBD_CTRL << 16) | Common::KEYCODE_RIGHT;
+	case 'S': case 's': return Common::KEYCODE_SPACE;
+	case '.':           return 0; // no-op
+	default:            return -1; // sentinel: invalid
+	}
+}
+
+// Direction -> single-letter for the trace file. Mirrors the harness CLI's
+// --facing values (N/E/S/W).
+static char directionToChar(Direction dir) {
+	switch (dir) {
+	case DIR_NORTH: return 'N';
+	case DIR_EAST:  return 'E';
+	case DIR_SOUTH: return 'S';
+	case DIR_WEST:  return 'W';
+	default:        return '?';
+	}
+}
+
 int ScreenshotHarness::run(XeenEngine *vm) {
 	Settings s;
 	Common::String err;
 	if (!parseSettings(s, err)) {
 		warning("Screenshot harness: %s", err.c_str());
 		exit(1);
+	}
+
+	// Pre-validate input-script characters before doing anything expensive.
+	// Whitespace and commas are permitted as visual separators and ignored.
+	Common::String cleanedScript;
+	if (!s.inputScript.empty()) {
+		for (uint i = 0; i < s.inputScript.size(); ++i) {
+			char c = s.inputScript[i];
+			if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == ',')
+				continue;
+			int bv = charToButtonValue(c);
+			if (bv < 0) {
+				warning("Screenshot harness: --mm-input-script contains invalid char '%c' "
+					"(expected F/B/L/R/</>/S/. or whitespace/comma)", c);
+				exit(1);
+			}
+			cleanedScript += c;
+		}
 	}
 
 	// Refuse to run on anything other than World of Xeen — the spec only
@@ -278,37 +365,104 @@ int ScreenshotHarness::run(XeenEngine *vm) {
 	vm->_interface->mainIconsPrint();
 	(*vm->_windows)[0].update();
 
-	// --- save the frame ---
-	Common::DumpFile out;
-	if (!out.open(s.screenshotPath)) {
-		warning("Screenshot harness: cannot open '%s' for writing",
-			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
-		exit(1);
+	// --- save the frame(s) ---
+	//
+	// Three modes share the same save path:
+	//   1. Single-shot legacy: --screenshot=PATH only. Writes one PNG.
+	//   2. Prefix-only: --mm-screenshot-prefix=PATH and no input script.
+	//      Writes <prefix>.000.png plus a one-line trace file. Used by callers
+	//      that want a uniform per-step output schema even for "step 0 only".
+	//   3. Input replay: --mm-screenshot-prefix=PATH plus --mm-input-script.
+	//      Writes step 0, then dispatches each input through the same code
+	//      path the keyboard handlers use, redraws, and writes
+	//      <prefix>.001.png ... <prefix>.NNN.png. The trace records the
+	//      resulting position/facing after each step (or the unchanged values
+	//      if the move was blocked by checkMoveDirection).
+
+	auto writeOrDie = [&](const Common::Path &path) {
+		if (!writeFramePng(vm, path))
+			exit(1);
+		debug("Screenshot harness: wrote %s",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+	};
+
+	Common::Path lastWritten;
+
+	if (!s.screenshotPrefix.empty()) {
+		Common::Path step0(Common::Path::fromCommandLine(
+			s.screenshotPrefix + ".000.png"));
+		writeOrDie(step0);
+		lastWritten = step0;
+
+		// Trace sidecar. Open eagerly so we can append per step. Format is
+		// fixed-width text rather than JSON: the per-step record is a single
+		// space-separated line, easy to parse with strings.Fields() in mm5e
+		// and easy to eyeball.
+		Common::DumpFile trace;
+		Common::Path tracePath(Common::Path::fromCommandLine(
+			s.screenshotPrefix + ".trace.txt"));
+		if (!trace.open(tracePath)) {
+			warning("Screenshot harness: cannot open '%s' for writing",
+				tracePath.toString(Common::Path::kNativeSeparator).c_str());
+			exit(1);
+		}
+
+		auto traceLine = [&](uint step, char inputChar) {
+			Common::String line = Common::String::format(
+				"%03u %c maze=%u pos=%d,%d facing=%c\n",
+				step, inputChar,
+				(unsigned)vm->_party->_mazeId,
+				(int)vm->_party->_mazePosition.x,
+				(int)vm->_party->_mazePosition.y,
+				directionToChar(vm->_party->_mazeDirection));
+			trace.write(line.c_str(), line.size());
+		};
+
+		// Step 0 records the initial state. Use '-' as the input-char marker
+		// since no input has been processed yet.
+		traceLine(0, '-');
+
+		// Per-step loop.
+		for (uint i = 0; i < cleanedScript.size(); ++i) {
+			char c = cleanedScript[i];
+			int bv = charToButtonValue(c);
+			// Skip dispatch entirely for '.' (no-op) but still capture and
+			// trace, so step counts stay aligned with mm5e's own per-step
+			// schedule.
+			if (bv > 0)
+				vm->_interface->replayHarnessInput(bv);
+
+			// Re-render. Match the existing single-shot code path: draw3d
+			// with updateFlag=true and pauseFlag=false, then refresh the
+			// HUD and window backbuffer so the captured surface matches
+			// what a player would see.
+			vm->_interface->draw3d(true, false);
+			vm->_interface->mainIconsPrint();
+			(*vm->_windows)[0].update();
+
+			Common::Path stepPath(Common::Path::fromCommandLine(
+				Common::String::format("%s.%03u.png",
+					s.screenshotPrefix.c_str(), i + 1)));
+			writeOrDie(stepPath);
+			lastWritten = stepPath;
+			traceLine(i + 1, c);
+		}
+
+		trace.close();
 	}
 
-	// Read the palette from the engine's own copy rather than from the
-	// SDL backend. Under the dummy / offscreen video drivers ScummVM uses
-	// for headless harness runs, getPaletteManager()->grabPalette() returns
-	// all zeros, which would produce a paletted PNG of pure black even
-	// though the surface buffer is correctly populated.
-	byte palette[256 * 3];
-	vm->_screen->getMainPalette(palette);
-
-	if (!Image::writePNG(out, vm->_screen->rawSurface(), palette)) {
-		warning("Screenshot harness: writePNG failed for '%s'",
-			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
-		out.close();
-		// Caller must check exit status; the partial PNG may be left on
-		// disk but the non-zero exit signals it should not be trusted.
-		exit(1);
+	// If --screenshot was given alongside --mm-screenshot-prefix, copy the
+	// final frame to it so legacy single-shot consumers keep getting their
+	// expected output. If only --screenshot is set (no prefix), this is the
+	// pre-existing single-shot path and the only artifact written.
+	if (!s.screenshotPath.empty()) {
+		writeOrDie(s.screenshotPath);
 	}
 
-	out.close();
-	debug("Screenshot harness: wrote %s",
-		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+	(void)lastWritten;
 
 	// One-shot mode: skip ScummVM's launcher / error dialog by exiting
-	// immediately. The successful PNG is the only artifact this run is
+	// immediately. The successful PNG(s) are the only artifacts this run is
 	// supposed to leave behind.
 	exit(0);
 }
