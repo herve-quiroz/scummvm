@@ -16,10 +16,11 @@ regression suite.
     worldofxeen
 ```
 
-The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot` is on
-the command line, so no game window pops up regardless of whether a real X /
-Wayland display is present. To pick a different driver (e.g. `offscreen`),
-set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var
+The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot`,
+`--mm-scale-test`, or `--mm-screenshot-prefix` is on the command line, so
+no game window pops up regardless of whether a real X / Wayland display is
+present. To pick a different driver (e.g. `offscreen`), set
+`SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var
 when none is provided.
 
 `--extrapath` points at the in-tree `dists/engine-data/` directory which
