@@ -1,69 +1,90 @@
 # Claude instructions
 
-This is a fork of [ScummVM](https://github.com/scummvm/scummvm). It exists to serve as a ground-truth oracle for the [mm5e](https://github.com/herve-quiroz/might_and_magic_srd5e) project — a Go reimplementation of *Might and Magic IV: World of Xeen*. The fork adds a one-shot screenshot harness to the MM/Xeen engine; mm5e calls into the harness as a subprocess to capture reference frames at known party positions and pixel-diffs them against its own renderer's output.
+**Before making any change to the harness, read `HARNESS.md`, especially the "Modifying the harness" section.** It documents the cross-project compatibility constraints that govern this branch.
+
+This is a fork of [ScummVM](https://github.com/scummvm/scummvm). It exists to serve as a ground-truth oracle for two Go projects:
+
+* [mm5e](https://github.com/herve-quiroz/might_and_magic_srd5e), a Go re-port of *Might and Magic IV: Clouds of Xeen*. Consumes the MM/Xeen harness.
+* [griddelve](https://github.com/herve-quiroz/griddelve), a Go EOB2-inspired engine. Consumes the KYRA/EOB2 harness.
+
+The fork adds one-shot screenshot harnesses to the MM/Xeen and KYRA engines; both projects call into the harness as a subprocess to capture reference frames at known party positions and pixel-diff them against their own renderer's output.
 
 ## What this fork is, what it isn't
 
-* **Is:** vanilla upstream ScummVM + a self-contained screenshot harness for the MM/Xeen engine. Patches are confined to a small set of files: `base/commandLine.cpp` (CLI option parsing), `backends/platform/sdl/posix/posix-main.cpp` (headless force), `engines/mm/xeen/screen.h` (palette accessor), `engines/mm/xeen/screenshot_harness.{h,cpp}` (the harness module), `engines/mm/xeen/xeen.cpp` (call site).
+* **Is:** vanilla upstream ScummVM + two self-contained screenshot harnesses. Patches are confined to a small set of files: `base/commandLine.cpp` (CLI option parsing), `backends/platform/sdl/posix/posix-main.cpp` (headless force), `engines/mm/xeen/screen.h` and `engines/mm/xeen/screenshot_harness.{h,cpp}` and `engines/mm/xeen/xeen.cpp` (MM/Xeen harness), `engines/kyra/engine/screenshot_harness.{h,cpp}` and `engines/kyra/engine/eobcommon.{h,cpp}` and `engines/kyra/engine/kyra_rpg.h` (KYRA/EOB2 harness).
 * **Isn't:** an upstream contribution (yet). Not a maintained ScummVM distribution. Don't take general ScummVM bug reports here.
 
 ## Scope of upstream policies
 
-`AI-GUIDELINES.md` at the repo root is upstream ScummVM's contributor policy for PRs to `scummvm/scummvm` (no AI-authored code, mandatory `Assisted-by:` trailers, etc.). It does **not** govern commits on the `screenshot-harness` branch of this fork. Harness commits are tooling for mm5e, not contributions to upstream, and may be Claude-authored without `Assisted-by:` trailers. If/when a harness change is ever proposed upstream, that submission would need to comply with `AI-GUIDELINES.md` separately.
+`AI-GUIDELINES.md` at the repo root is upstream ScummVM's contributor policy for PRs to `scummvm/scummvm` (no AI-authored code, mandatory `Assisted-by:` trailers, etc.). It does **not** govern commits on the `harness` branch of this fork. Harness commits are tooling for mm5e and griddelve, not contributions to upstream, and may be Claude-authored without `Assisted-by:` trailers. If/when a harness change is ever proposed upstream, that submission would need to comply with `AI-GUIDELINES.md` separately.
 
 ## Branches and tags
 
 | Branch / Tag | What it is |
 |--------------|------------|
 | `master` | Mirrors `upstream/master`. Don't commit harness changes here. |
-| `screenshot-harness` | Where the harness lives. New harness changes go here, on top of master. |
-| `mm5e-harness-v1` | Tag pinning a known-working harness state. mm5e references this tag in its docs. |
+| `harness` | The single source of truth for both harnesses. Shared between mm5e and griddelve. All harness work goes here. |
+| `mm5e-harness-v1` .. `mm5e-harness-v12` | Legacy version-pin tags from when mm5e pinned a specific harness state. Kept for archeology only. Do not move, do not delete, do not create new ones. |
 
-When you ship harness changes, bump the tag (`mm5e-harness-v2`, `v3`, …) and push it. Don't move existing tags; mm5e treats them as immutable references.
+The old `screenshot-harness` and `eob2-harness` branches have been deleted from origin. Both have merged into `harness`.
+
+mm5e and griddelve now track the `harness` branch directly rather than a pinned tag. Coordination cost moves from "bump a tag every change" to "don't break either consumer", documented in `HARNESS.md`.
 
 ## The harness, at a glance
 
-CLI invocation (full contract is in `HARNESS.md`):
+Full CLI contract is in `HARNESS.md`. Short version:
+
+MM/Xeen:
 
 ```bash
 ./scummvm \
     --path="/path/to/Might and Magic 4-5/" \
     --extrapath=./dists/engine-data \
     --music-driver=null -m 0 -s 0 -r 0 \
-    --screenshot=/tmp/out.png \
+    --screenshot=/tmp/mm.png \
     --level=28 --cell=8,8 --facing=N \
     worldofxeen
 ```
 
-Outputs a 320×200 PNG of the rendered first-person frame and exits. Headless via `SDL_VIDEODRIVER=dummy` (auto-set when `--screenshot` is on the CLI).
+KYRA/EOB2:
 
-Source pointers:
+```bash
+./scummvm \
+    --path="/path/to/EOB2/" \
+    --music-driver=null -m 0 -s 0 -r 0 \
+    --screenshot=/tmp/eob.png \
+    --level=1 --cell=15,20 --facing=N \
+    eob2
+```
+
+Each invocation outputs a 320x200 PNG of the rendered first-person frame and exits. Headless via `SDL_VIDEODRIVER=dummy` (auto-set when `--screenshot` is on the CLI).
+
+Source pointers (see `HARNESS.md` for the full split between shared / MM / KYRA):
 
 * CLI parsing: `base/commandLine.cpp`, search for `--screenshot`.
 * Headless force: `backends/platform/sdl/posix/posix-main.cpp`, early `setenv` of `SDL_VIDEODRIVER=dummy`.
-* Engine palette accessor: `engines/mm/xeen/screen.h`, `Screen::getMainPalette`.
-* Harness module: `engines/mm/xeen/screenshot_harness.{h,cpp}`.
-* Engine hook: `engines/mm/xeen/xeen.cpp`, in `XeenEngine::run()`.
-* Plan and rationale: `docs/superpowers/plans/2026-04-30-screenshot-harness.md`.
+* MM/Xeen harness: `engines/mm/xeen/screenshot_harness.{h,cpp}`, hooked from `engines/mm/xeen/xeen.cpp` (`XeenEngine::run()`).
+* KYRA/EOB2 harness: `engines/kyra/engine/screenshot_harness.{h,cpp}`, hooked from `engines/kyra/engine/eobcommon.cpp` (`EoBCoreEngine::go()` after `loadItemDefs()`).
 
 ## What you might be asked to do
 
-* **Fix a harness bug.** mm5e's `docs/scummvm-harness-bug.md` style document describes the symptom. Reproduce it in this tree, fix, retest, push the harness branch, bump the tag.
-* **Extend the harness.** Add a new flag, expose more engine state (e.g. dump `_wo[]` flags as a sidecar JSON), add an animation-frame override. Keep changes additive and documented in `HARNESS.md`.
+* **Fix a harness bug.** The reporting consumer (mm5e or griddelve) typically has a docs page describing the symptom. Reproduce in this tree, fix, retest both consumers if the change touches shared code, push the harness branch.
+* **Extend the harness.** Add a new flag, expose more engine state, add an animation-frame override. Keep changes additive and documented in `HARNESS.md`. Prefer namespaced flags (`--mm-*`, `--kyra-*` or `--eob-*`) over additions to the shared core.
 * **Sync with upstream.** When ScummVM upstream advances and we want their changes, see "Syncing" below.
 * **Verify the harness still builds and runs after upstream changes.** A simple smoke test command is in the verification section.
 
 ## What you should NOT do
 
-* Modify mm5e itself (`~/src/might_and_magic_srd5e/` or wherever it's checked out). Different project, different repo.
-* Fix general ScummVM bugs unrelated to the MM/Xeen harness. Those belong upstream as PRs to `scummvm/scummvm`.
-* Move or delete existing `mm5e-harness-vN` tags. They are immutable references mm5e relies on.
-* Make non-harness changes on the `screenshot-harness` branch. Keep that branch focused; if you need to change something else, it probably belongs upstream or in a separate branch.
+* Modify mm5e or griddelve themselves from inside this tree. Different projects, different repos.
+* Fix general ScummVM bugs unrelated to the harnesses. Those belong upstream as PRs to `scummvm/scummvm`.
+* Create new `mm5e-harness-vN` tags. The tag-bump cycle has been retired; consumers track the `harness` branch directly.
+* Move or delete the existing `mm5e-harness-v1` .. `mm5e-harness-v12` legacy tags. They are archeology.
+* Make non-harness changes on the `harness` branch. Keep that branch focused; if you need to change something else, it probably belongs upstream or in a separate branch.
 
 ## Build
 
 ```bash
-./configure --disable-all-engines --enable-engine=mm,xeen \
+./configure --disable-all-engines --enable-engine=mm,xeen,kyra \
             --disable-mt32emu --disable-nuked-opl --disable-lua \
             --disable-16bit --disable-highres --disable-scalers \
             --disable-hq-scalers
@@ -72,9 +93,13 @@ make -j$(nproc)
 
 Produces `./scummvm` in the tree root. Standard ScummVM build deps apply (`build-essential`, `libsdl2-dev`, `libpng-dev`, `zlib1g-dev`, `libfreetype-dev`, `libjpeg-dev`).
 
+If you only need one harness for the change at hand, you can drop the unused engine from `--enable-engine`. CI / verification runs should include both.
+
 ## Verification
 
-After any harness change, run this end-to-end smoke test (path may need adjusting):
+After any harness change, run end-to-end smoke tests for whichever consumer you touched. If you changed shared code (CLI parsing, headless force, core flag semantics), run smoke tests for both consumers.
+
+MM/Xeen smoke test:
 
 ```bash
 ./scummvm \
@@ -94,7 +119,7 @@ Expectations:
 * `/tmp/test.png` shows Vertigo's indoor scene (wood ceiling, stone walls, side ornaments). NOT all black; NOT an unrelated frame.
 * Run with `--cell=15,8 --facing=W` and confirm a different scene (entrance corridor with sky and trees visible).
 
-If those pass, the harness is working. mm5e's regression test suite (`cmd/mm5e/scummvm_diff_integration_test.go` in mm5e) is the deeper end-to-end check.
+KYRA/EOB2 smoke test follows the same pattern with the EOB2 target. The deeper end-to-end checks live in each consumer: mm5e's `cmd/mm5e/scummvm_diff_integration_test.go`, and griddelve's equivalent.
 
 ## Syncing with upstream
 
@@ -102,17 +127,17 @@ If those pass, the harness is working. mm5e's regression test suite (`cmd/mm5e/s
 git fetch upstream
 git checkout master && git merge upstream/master   # update master mirror
 git push origin master
-git checkout screenshot-harness && git rebase master  # rebase harness on new upstream
-git push origin screenshot-harness --force-with-lease
-# After verifying the harness still builds + smokes:
-git tag mm5e-harness-vN  # bump N
-git push origin mm5e-harness-vN
+git checkout harness && git rebase master           # rebase harness on new upstream
+# Build, run smoke tests for both consumers.
+git push origin harness --force-with-lease
 ```
 
-Force-pushing the `screenshot-harness` branch is fine because mm5e references the tag, not the branch. Don't force-push `master` — that's the upstream mirror.
+Force-pushing the `harness` branch is fine because consumers track the branch head and a pre-push rebuild covers the API surface. Don't force-push `master`; that's the upstream mirror.
+
+No tag bump after the rebase. The legacy `mm5e-harness-vN` tags stay frozen at their original commits.
 
 ## When in doubt
 
 * The harness's intended invocation contract is in `HARNESS.md`. If your change breaks that contract, you're going too far.
-* The mm5e project's `docs/scummvm-reference-harness.md` describes how mm5e consumes this harness. If your change breaks mm5e's regression tests, that's a real regression — coordinate with the mm5e codebase before shipping.
-* Default to small, focused commits on `screenshot-harness`. The fork's value is being a thin layer over upstream; the more we add, the harder upstream syncing gets.
+* Each consumer's `docs/` directory describes how it calls the harness (mm5e: `docs/scummvm-reference-harness.md`; griddelve: its own equivalent). If your change breaks either consumer's regression tests, that's a real regression; coordinate before shipping.
+* Default to small, focused commits on `harness`. The fork's value is being a thin layer over upstream; the more we add, the harder upstream syncing gets.
