@@ -84,7 +84,7 @@ Source pointers (see `HARNESS.md` for the full split between shared / MM / KYRA)
 ## Build
 
 ```bash
-./configure --disable-all-engines --enable-engine=mm,xeen,kyra \
+./configure --disable-all-engines --enable-engine=mm,xeen,kyra,eob \
             --disable-mt32emu --disable-nuked-opl --disable-lua \
             --disable-16bit --disable-highres --disable-scalers \
             --disable-hq-scalers
@@ -93,7 +93,9 @@ make -j$(nproc)
 
 Produces `./scummvm` in the tree root. Standard ScummVM build deps apply (`build-essential`, `libsdl2-dev`, `libpng-dev`, `zlib1g-dev`, `libfreetype-dev`, `libjpeg-dev`).
 
-If you only need one harness for the change at hand, you can drop the unused engine from `--enable-engine`. CI / verification runs should include both.
+Every sub-engine must be named explicitly. After `--disable-all-engines`, enabling a parent does not pull its sub-engines in: `configure` only expands them for the `<engine>_all` form. So `xeen` is listed alongside its parent `mm`, and `eob` alongside its parent `kyra`. Omitting `eob` still builds and still links a working binary, it just has no Eye of the Beholder support, which silently breaks every griddelve reference capture.
+
+The two consumers need different halves: mm5e needs `mm,xeen`, griddelve needs `kyra,eob`. If you only need one harness for the change at hand, you can drop the unused pair from `--enable-engine`. CI / verification runs should include both.
 
 ## Verification
 
