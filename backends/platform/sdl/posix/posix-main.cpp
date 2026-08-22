@@ -50,7 +50,8 @@ int main(int argc, char *argv[]) {
 				|| strncmp(argv[i], "--mm-scale-test=", 16) == 0
 				|| strncmp(argv[i], "--mm-screenshot-prefix=", 23) == 0
 				|| strncmp(argv[i], "--eob-dump-state=", 17) == 0
-				|| strncmp(argv[i], "--eob-batch=", 12) == 0)) {
+				|| strncmp(argv[i], "--eob-batch=", 12) == 0
+				|| strncmp(argv[i], "--eob-fire-triggers=", 20) == 0)) {
 			setenv("SDL_VIDEODRIVER", "dummy", 0);
 			break;
 		}

@@ -65,6 +65,11 @@ public:
 		// rendered frame.
 		Common::Path dumpStatePath;
 
+		// Trigger-firing output. Empty means "not requested". Fires
+		// every trigger on the level from a clean state and records
+		// what each one changed.
+		Common::Path fireTriggersPath;
+
 		// Batch script. Empty means "not requested". Each line is one
 		// capture, letting a whole level set be produced by a single
 		// process. That matters because ScummVM's shutdown path stalls
@@ -95,6 +100,15 @@ public:
 	 *          line (--screenshot, --eob-dump-state or --eob-batch).
 	 */
 	static bool isEnabled();
+
+	/**
+	 * Supply the next scripted dialogue answer, if the harness was given
+	 * any. EoBCoreEngine::runDialogue calls this before it would block
+	 * waiting for a button press: a headless harness has no one to click.
+	 *
+	 * @returns true if @p out was filled with a forced answer.
+	 */
+	static bool nextDialogueAnswer(int &out);
 
 	/**
 	 * Write a canonical engine state snapshot for the currently loaded
@@ -136,6 +150,51 @@ private:
 
 	/** Execute a batch script. @returns false and sets @p err on failure. */
 	static bool runBatch(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+
+	/**
+	 * Fire every trigger on @p level from a clean state, recording what
+	 * each one changed. @returns false and sets @p err on failure.
+	 */
+	static bool fireTriggers(EoBCoreEngine *vm, int level, const Common::Path &path,
+		Common::String &err);
+
+	/**
+	 * Everything a trigger can change, small enough to hold two copies
+	 * while one script runs. Declared here rather than at file scope so
+	 * the capture helper can be a member and inherit the harness's
+	 * friendship with the engine classes.
+	 */
+	struct TriggerState {
+		uint8 walls[1024][4];
+		uint32 flags[18];
+		uint8 level;
+		uint16 block;
+		uint16 direction;
+		int8 doorState[3];
+		uint16 doorBlock[3];
+	};
+
+	/** Copy the engine's current trigger-visible state into @p out. */
+	static void captureTriggerState(EoBCoreEngine *vm, TriggerState &out);
+
+	/** Reload @p level so each trigger fires against identical state. */
+	static void resetLevel(EoBCoreEngine *vm, int level);
+
+	/**
+	 * Install a fixed four-character party.
+	 *
+	 * startupNew() only sets up the playfield; it creates no characters,
+	 * so a harness run has an empty party. That is harmless while only
+	 * drawing frames (the portraits are empty in reference and candidate
+	 * alike) but fatal once scripts run: oeob_printMessage_v2 picks a
+	 * speaker with `while (!testCharacter(c, 3)) c = (c + 1) % 6;`, which
+	 * spins forever when no character qualifies.
+	 *
+	 * The party is deliberately minimal and fixed rather than imported
+	 * from a save, so that a trigger sweep is reproducible on any
+	 * installation.
+	 */
+	static void installHarnessParty(EoBCoreEngine *vm);
 };
 
 } // End of namespace Kyra

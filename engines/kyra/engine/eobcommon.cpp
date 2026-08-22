@@ -629,7 +629,13 @@ Common::Error EoBCoreEngine::go() {
 
 	// Import original save game files (especially the "Quick Start Party").
 	// The SegaCD version has a "Default Party" main menu option instead.
-	if (ConfMan.getBool("importOrigSaves")) {
+	//
+	// Skipped under the reference harness: the import path puts a modal
+	// prompt on screen, and a headless run has nobody to dismiss it, so
+	// startup blocks in the dialogue loop until the process is asked to
+	// quit. The harness bootstraps its own party via startupNew() and
+	// does not need the imported originals.
+	if (ConfMan.getBool("importOrigSaves") && !ScreenshotHarness::isEnabled()) {
 		if (_flags.platform != Common::kPlatformSegaCD)
 			importOriginalSaveFile(-1);
 		ConfMan.setBool("importOrigSaves", false);
@@ -1806,6 +1812,13 @@ void EoBCoreEngine::drawSequenceBitmap(const char *file, int destRect, int x1, i
 }
 
 int EoBCoreEngine::runDialogue(int dialogueTextId, int numStr, int loopButtonId, ...) {
+	// The reference harness runs headless with nobody to press a button,
+	// so it supplies scripted answers instead. Without this, the first
+	// trigger that opens a dialogue spins in processDialogue() forever.
+	int forced = 0;
+	if (ScreenshotHarness::nextDialogueAnswer(forced))
+		return forced;
+
 	int res;
 	do {
 		res = 0;
@@ -1950,6 +1963,14 @@ bool EoBCoreEngine::restParty_extraAbortCondition() {
 }
 
 void EoBCoreEngine::delay(uint32 millis, bool, bool) {
+	// The reference harness is headless and has no player to wait for.
+	// Scripted delays and cutscene pacing would otherwise stall a sweep
+	// that fires every trigger in the game, so skip the wait outright.
+	// This is the single choke point: KyraRpgEngine::delayUntil routes
+	// through here too.
+	if (ScreenshotHarness::isEnabled())
+		return;
+
 	while (millis && !shouldQuit() && !(_allowSkip && skipFlag())) {
 		updateInput();
 		uint32 step = MIN<uint32>(millis, (_tickLength / 5));

@@ -72,9 +72,11 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 |------|----------|--------|-------------|
 | `--save-slot` (alias `-x`) | no (default -1) | integer save slot | Restore the given save instead of doing a fresh-game bootstrap. When `--save-slot=N` is supplied, `--level`, `--cell`, and `--facing` become optional post-load overrides; omit them to capture the save's recorded position. This is how state-dependent scenes (open doors, pulled levers, scripted decoration changes) are captured for diffing. |
 | `--eob-dump-state` | no | absolute filesystem path | Write a canonical engine state snapshot (see below) and exit. Requires `--level`; `--cell` and `--facing` are optional, because a snapshot describes the whole level rather than a viewpoint. Does not require `--screenshot`; if both are given, both outputs are produced. |
+| `--eob-fire-triggers` | no | absolute filesystem path | Fire every trigger on `--level` from a clean state and record what each one changed. See "Trigger sweeps" below. |
+| `--eob-dialog-answers` | no | comma-separated integers | Dialogue button answers, consumed in order. Past the end, answers default to 1. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_batch`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_batch`.
 
 ### State snapshots
 
@@ -102,19 +104,62 @@ enumeration both engines must agree on.
 Reading `_flagTable` requires a `friend class ScreenshotHarness` declaration on
 `EoBInfProcessor`: the public `setFlags`/`checkFlags` mask API cannot enumerate flags.
 
+### Trigger sweeps
+
+`--eob-fire-triggers=PATH` enumerates every block on the level whose `assignedObjects` is
+non-zero, then fires each one from a freshly reloaded level and records what changed.
+Each block is fired once per invocation kind a player can cause (`0x01` step-on, `0x02`
+step-off, `0x40` wall click), skipping kinds the block's own flags do not admit; `run()`
+gates on `subFlags = ((blockFlags & 0xFFF8) >> 3) | 0xE0`.
+
+```
+# eob2-triggers v1
+level 4
+trigger <block> <x> <y> flags=<hex4> script=<hex4> invoke=<hex2>
+  wall <block> <dir> <old> -> <new>
+  flag <idx> <old> -> <new>
+  party <x> <y> <dir> -> <x> <y> <dir>
+  level <old> -> <new>
+  door <slot> <block>/<state> -> <block>/<state>
+  walls-not-compared level-changed
+  dialogues <n>
+  end
+# <n> trigger block(s)
+```
+
+Only deltas are recorded, so a trigger that changes nothing is two lines. A trigger that
+switches level leaves the block table describing a different map, so the wall and door
+diffs are replaced by `walls-not-compared level-changed`; without that, one such trigger
+emits over a thousand meaningless lines.
+
+The level is fully reloaded between firings, with `_hasTempDataFlags` cleared first:
+otherwise `loadBlockProperties` restores the modified block table instead of re-reading
+the maze, and the previous trigger's edits leak into the next one's baseline.
+
+Setting `EOB_TRIG_PROGRESS=/path` writes the current trigger to that file, rewritten and
+closed per firing. The main output is buffered, so if a script hangs or crashes this file
+is the only record of which trigger was responsible. It is a debugging aid, not part of
+the reference format.
+
+All 15 levels sweep in about 12 seconds in one batched process, producing roughly 1560
+firings across 1005 trigger blocks.
+
 ### Batch mode
 
-ScummVM's shutdown path never reaches the harness's `_exit(0)` (see "Known issues"), so
-every invocation costs a wall-clock timeout regardless of how fast the capture itself is.
-At the scale griddelve's conformance suite needs (1005 triggers plus several hundred
-render cases) per-capture invocation is prohibitive. `--eob-batch=FILE` processes many
-captures in a single process instead.
+Startup work is repeated per process, so bulk capture is much cheaper in one.
+`--eob-batch=FILE` processes many captures in a single process.
+
+(Historically this mattered far more: the harness appeared never to terminate and its
+output only landed when the process was killed. Both were symptoms of the modal
+original-save import blocking startup, described under "Headless execution" below. With
+that skipped, a single capture now runs in about two seconds and exits 0.)
 
 Each non-empty, non-`#` line of FILE is one capture:
 
 ```
-state <outpath> <level>
-shot  <outpath> <level> <x> <y> <N|E|S|W>
+state    <outpath> <level>
+triggers <outpath> <level>
+shot     <outpath> <level> <x> <y> <N|E|S|W>
 ```
 
 `state` parks the party at block (0,0) facing north before dumping, so the snapshot's
@@ -174,34 +219,34 @@ KYRA/EOB2 has no equivalent input-replay mode yet. It is planned as the next sli
 griddelve's conformance work, alongside a trigger-firing mode; both will build on the
 state snapshot described above rather than on per-step PNGs alone.
 
-## Known issues
+## Headless execution of game scripts
 
-The KYRA harness never terminates on its own, and its output only reaches disk when the
-process dies. Measured behaviour: the expected file appears at exactly the moment the
-process is killed, for every timeout value tried (20s, 30s, 90s, 120s), and its contents
-are byte-identical regardless. So `timeout` is not a safety net bolted onto a slow
-harness; it is how the capture completes.
+Firing scripts outside a real play session runs code that assumes a player and a
+screen. The harness neutralises that under `ScreenshotHarness::isEnabled()`, which is
+false unless one of the harness flags is on the command line, so normal ScummVM play is
+untouched:
 
-The practical contract for KYRA callers is therefore:
+| Site | Why |
+|------|-----|
+| `EoBCoreEngine::go` | Skips the original-save import. Its modal prompt has nobody to dismiss it, and startup blocks in the dialogue loop until the process is asked to quit. |
+| `EoBCoreEngine::runDialogue` | Returns a scripted answer from `--eob-dialog-answers` instead of waiting for a button press. |
+| `EoBCoreEngine::delay` | Returns immediately. The single choke point for timed waits; `KyraRpgEngine::delayUntil` routes through it. |
+| `TextDisplayer_rpg::displayWaitButton` | Returns immediately; it otherwise spins on `processDialogue()` waiting for a click. |
+| `TextDisplayer_rpg::textPageBreak` | Same, for the "more" prompt. |
+| `TextDisplayer_rpg::printMessage` | Returns immediately. Message rendering is pure presentation and segfaults when driven outside the screen state it assumes. |
 
-* Wrap every invocation in `timeout N`.
-* Treat exit code 124 as success when the expected output files exist and are non-empty.
-* Keep N small. A 15-level `--eob-batch` state capture plus a PNG produced all 16 outputs
-  under `timeout 20`, byte-identical to the same batch under `timeout 120`. The extra
-  time is pure stall.
+Consequence: **message text is not captured**. The state snapshot does not model it, so
+conformance loses nothing today, but a future slice that wants to diff message output
+will need to intercept at the `oeob_printMessage_*` opcode instead of suppressing the
+renderer.
 
-`scripts/capture-scummvm-refs.sh` in griddelve already follows this contract. Batch mode
-exists mainly to pay the stall once per batch instead of once per capture.
-
-This is pre-existing, reproducible with a plain `--screenshot` invocation, and not
-introduced by `--eob-dump-state` or `--eob-batch`. Switching the harness's final
-`_exit(0)` to `exit(0)` does not change it. **The MM/Xeen harness is not affected** and
-exits 0 promptly, so whatever holds the process open is specific to the EOB2 shutdown
-path. The root cause has not been diagnosed.
-
-When diagnosing, poll for the expected output file rather than reading the log: stderr is
-block-buffered when redirected, so log lines also only appear at process death, which
-makes it easy to misattribute the stall to whichever flag was added last.
+The harness also installs a fixed four-character party
+(`ScreenshotHarness::installHarnessParty`). `startupNew()` only sets up the playfield and
+creates no characters, so a harness run otherwise has an empty party. That is invisible
+while only drawing frames, but `oeob_printMessage_v2` picks a speaker with
+`while (!testCharacter(c, 3)) c = (c + 1) % 6;`, which spins forever when nobody
+qualifies. The party is synthetic and fixed rather than imported from a save so that a
+sweep is reproducible on any installation.
 
 ## Source pointers
 

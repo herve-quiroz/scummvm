@@ -5,6 +5,7 @@
 // destructors that the engine's own message loop normally drains before
 // teardown.
 #define FORBIDDEN_SYMBOL_EXCEPTION_exit
+#define FORBIDDEN_SYMBOL_EXCEPTION_getenv
 
 // Pull <unistd.h> in before "common/forbidden.h" so its declarations of
 // chdir/getcwd/etc. don't collide with the forbidden-symbol macros.
@@ -56,7 +57,46 @@ static bool haveSetting(const char *key) {
 
 bool ScreenshotHarness::isEnabled() {
 	return haveSetting("screenshot") || haveSetting("eob_dump_state")
-		|| haveSetting("eob_batch");
+		|| haveSetting("eob_batch") || haveSetting("eob_fire_triggers");
+}
+
+// Scripted dialogue answers, consumed in order by runDialogue. A headless
+// harness has nobody to click the buttons, and several EOB2 triggers open
+// a dialogue, so without these the engine spins forever on the first one.
+static Common::Array<int> g_dialogueAnswers;
+static uint g_dialogueAnswerPos = 0;
+static int g_dialogueDefault = 1;
+static uint g_dialoguesAnswered = 0;
+
+static void parseDialogueAnswers() {
+	g_dialogueAnswers.clear();
+	g_dialogueAnswerPos = 0;
+	g_dialoguesAnswered = 0;
+	if (!haveSetting("eob_dialog_answers"))
+		return;
+	Common::StringTokenizer tok(ConfMan.get("eob_dialog_answers"), ",");
+	while (!tok.empty()) {
+		Common::String t = tok.nextToken();
+		t.trim();
+		if (!t.empty())
+			g_dialogueAnswers.push_back(atoi(t.c_str()));
+	}
+}
+
+bool ScreenshotHarness::nextDialogueAnswer(int &out) {
+	if (!isEnabled())
+		return false;
+
+	// Past the end of the supplied list, keep answering with the default
+	// rather than blocking: a trigger sweep must not stall on trigger 900
+	// because the answer list was written for the first few.
+	if (g_dialogueAnswerPos < g_dialogueAnswers.size())
+		out = g_dialogueAnswers[g_dialogueAnswerPos++];
+	else
+		out = g_dialogueDefault;
+
+	g_dialoguesAnswered++;
+	return true;
 }
 
 static bool parseFacing(const Common::String &raw, uint8 &out) {
@@ -75,11 +115,16 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	const bool haveShot = haveSetting("screenshot");
 	const bool haveDump = haveSetting("eob_dump_state");
 	const bool haveBatch = haveSetting("eob_batch");
+	const bool haveTrig = haveSetting("eob_fire_triggers");
 
-	if (!haveShot && !haveDump && !haveBatch) {
-		err = "one of --screenshot=PATH, --eob-dump-state=PATH or --eob-batch=FILE is required";
+	if (!haveShot && !haveDump && !haveBatch && !haveTrig) {
+		err = "one of --screenshot=PATH, --eob-dump-state=PATH, --eob-fire-triggers=PATH "
+			"or --eob-batch=FILE is required";
 		return false;
 	}
+	if (haveTrig)
+		out.fireTriggersPath = Common::Path::fromCommandLine(ConfMan.get("eob_fire_triggers"));
+	parseDialogueAnswers();
 	if (haveShot)
 		out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
 	if (haveDump)
@@ -345,6 +390,207 @@ bool ScreenshotHarness::writeFrame(EoBCoreEngine *vm, const Common::Path &path,
 	return true;
 }
 
+void ScreenshotHarness::captureTriggerState(EoBCoreEngine *vm, TriggerState &out) {
+	for (int i = 0; i < 1024; ++i)
+		for (int w = 0; w < 4; ++w)
+			out.walls[i][w] = vm->_levelBlockProperties[i].walls[w];
+	for (int i = 0; i < 18; ++i)
+		out.flags[i] = vm->_inf->_flagTable[i];
+	out.level = vm->_currentLevel;
+	out.block = vm->_currentBlock;
+	out.direction = vm->_currentDirection;
+	for (int i = 0; i < 3; ++i) {
+		out.doorState[i] = vm->_openDoorState[i].state;
+		out.doorBlock[i] = vm->_openDoorState[i].block;
+	}
+}
+
+// Reload the level from scratch so each trigger fires against identical
+// state. _hasTempDataFlags has to be cleared first: with it set,
+// loadBlockProperties restores the modified block table instead of
+// re-reading the maze, and the previous trigger's wall edits leak into
+// the next one's baseline.
+void ScreenshotHarness::installHarnessParty(EoBCoreEngine *vm) {
+	static const char *const kNames[4] = { "HARNESS1", "HARNESS2", "HARNESS3", "HARNESS4" };
+
+	for (int i = 0; i < 6; ++i) {
+		EoBCharacter &c = vm->_characters[i];
+		if (i >= 4) {
+			c.flags = 0;
+			continue;
+		}
+		c.id = (uint8)i;
+		c.flags = 1;
+		Common::strlcpy(c.name, kNames[i], sizeof(c.name));
+		c.strengthCur = c.strengthMax = 16;
+		c.strengthExtCur = c.strengthExtMax = 0;
+		c.intelligenceCur = c.intelligenceMax = 12;
+		c.wisdomCur = c.wisdomMax = 12;
+		c.dexterityCur = c.dexterityMax = 12;
+		c.constitutionCur = c.constitutionMax = 12;
+		c.charismaCur = c.charismaMax = 12;
+		c.hitPointsCur = c.hitPointsMax = 20;
+		c.armorClass = 10;
+		c.disabledSlots = 0;
+		c.raceSex = 0;
+		c.cClass = 0;
+		c.alignment = 0;
+		c.portrait = (int8)i;
+		c.food = 100;
+		for (int l = 0; l < 3; ++l) {
+			c.level[l] = 1;
+			c.experience[l] = 0;
+		}
+		c.hitPointsDividend = 0;
+	}
+	vm->_updateCharNum = 0;
+}
+
+void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
+	vm->_hasTempDataFlags = 0;
+	vm->_inf->reset();
+	installHarnessParty(vm);
+	vm->_currentLevel = level;
+	vm->_currentSub = 0;
+	vm->loadLevel(level, 0);
+	vm->_currentBlock = 0;
+	vm->_currentDirection = 0;
+}
+
+bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
+		const Common::Path &path, Common::String &err) {
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		err = Common::String::format("cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	out.writeString("# eob2-triggers v1\n");
+	out.writeString(Common::String::format("level %d\n", level));
+	out.flush();
+
+	resetLevel(vm, level);
+
+	// Collect the trigger list before firing anything: a trigger can
+	// rewrite block properties, and the enumeration must describe the
+	// level as loaded, not as some earlier trigger left it.
+	Common::Array<uint16> blocks;
+	for (int i = 0; i < 1024; ++i) {
+		if (vm->_levelBlockProperties[i].assignedObjects)
+			blocks.push_back((uint16)i);
+	}
+
+	// The three invocation kinds a player can cause. run() gates on
+	// subFlags = ((blockFlags & 0xFFF8) >> 3) | 0xE0, so 0x40 always
+	// passes while 0x01 and 0x02 depend on the block's own flags.
+	static const int kInvokeFlags[] = { 0x01, 0x02, 0x40 };
+
+	TriggerState before, after;
+
+	for (uint bi = 0; bi < blocks.size(); ++bi) {
+		const uint16 block = blocks[bi];
+
+		for (int fi = 0; fi < ARRAYSIZE(kInvokeFlags); ++fi) {
+			const int invoke = kInvokeFlags[fi];
+
+			resetLevel(vm, level);
+
+			const uint16 blockFlags = vm->_levelBlockProperties[block].flags;
+			const uint16 script = vm->_levelBlockProperties[block].assignedObjects;
+			const uint16 subFlags = ((blockFlags & 0xFFF8) >> 3) | 0xE0;
+			if (!(invoke & subFlags))
+				continue;
+
+			// Put the party on the trigger's own block facing north.
+			// Step-on scripts routinely read the party position, and a
+			// party parked elsewhere would take a different branch.
+			vm->_currentBlock = block;
+			vm->_currentDirection = 0;
+
+			captureTriggerState(vm, before);
+			const uint answeredBefore = g_dialoguesAnswered;
+
+			// Record and flush the header before running the script, so
+			// that a script which hangs or crashes leaves a file whose
+			// last line names the trigger responsible.
+			out.writeString(Common::String::format(
+				"trigger %u %u %u flags=%04x script=%04x invoke=%02x\n",
+				block, block & 0x1F, (block >> 5) & 0x1F, blockFlags, script, invoke));
+			out.flush();
+
+			if (const char *pf = getenv("EOB_TRIG_PROGRESS")) {
+				Common::DumpFile prog;
+				if (prog.open(Common::Path(pf))) {
+					// Rewritten (not appended) each time, and closed
+					// immediately: the main output is buffered, so if a
+					// script hangs this file is the only record of which
+					// trigger was running. Enable with EOB_TRIG_PROGRESS.
+					prog.writeString(Common::String::format(
+						"block=%u invoke=%02x script=%04x\n", block, invoke, script));
+					prog.close();
+				}
+			}
+
+			vm->runLevelScript(block, invoke);
+
+			captureTriggerState(vm, after);
+
+			// A trigger that switches level leaves the block table
+			// describing a different map, so a wall-by-wall diff would
+			// be a thousand lines of noise rather than a record of what
+			// the trigger did. Report the transition instead.
+			const bool levelChanged = before.level != after.level;
+			if (levelChanged) {
+				out.writeString("  walls-not-compared level-changed\n");
+			} else {
+				for (int i = 0; i < 1024; ++i) {
+					for (int w = 0; w < 4; ++w) {
+						if (before.walls[i][w] != after.walls[i][w])
+							out.writeString(Common::String::format(
+								"  wall %d %d %d -> %d\n", i, w,
+								before.walls[i][w], after.walls[i][w]));
+					}
+				}
+			}
+			for (int i = 0; i < 18; ++i) {
+				if (before.flags[i] != after.flags[i])
+					out.writeString(Common::String::format(
+						"  flag %d %08x -> %08x\n", i, before.flags[i], after.flags[i]));
+			}
+			if (before.level != after.level)
+				out.writeString(Common::String::format(
+					"  level %d -> %d\n", before.level, after.level));
+			if (before.block != after.block || before.direction != after.direction)
+				out.writeString(Common::String::format(
+					"  party %u %u %u -> %u %u %u\n",
+					before.block & 0x1F, (before.block >> 5) & 0x1F, before.direction,
+					after.block & 0x1F, (after.block >> 5) & 0x1F, after.direction));
+			for (int i = 0; i < 3 && !levelChanged; ++i) {
+				if (before.doorState[i] != after.doorState[i]
+						|| before.doorBlock[i] != after.doorBlock[i])
+					out.writeString(Common::String::format(
+						"  door %d %u/%d -> %u/%d\n", i,
+						before.doorBlock[i], before.doorState[i],
+						after.doorBlock[i], after.doorState[i]));
+			}
+			if (g_dialoguesAnswered != answeredBefore)
+				out.writeString(Common::String::format(
+					"  dialogues %u\n", g_dialoguesAnswered - answeredBefore));
+			out.writeString("  end\n");
+			// Flush per trigger: the KYRA harness's output normally only
+			// lands when the process dies, so without this a sweep that
+			// stalls on one script leaves nothing to say which.
+			out.flush();
+		}
+	}
+
+	out.writeString(Common::String::format("# %u trigger block(s)\n", blocks.size()));
+	out.finalize();
+	out.close();
+	return true;
+}
+
 bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
 		Common::String &err) {
 	Common::FSNode node(path);
@@ -388,6 +634,26 @@ bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
 			// snapshot's party line stays deterministic.
 			gotoPosition(vm, (uint8)level, 0, 0, 0);
 			if (!writeStateSnapshot(vm, Common::Path::fromCommandLine(outPath), err)) {
+				err = Common::String::format("line %d: %s", lineNo, err.c_str());
+				ok = false;
+				break;
+			}
+			++captured;
+		} else if (cmd == "triggers") {
+			Common::String outPath = tok.nextToken();
+			Common::String levelStr = tok.nextToken();
+			if (outPath.empty() || levelStr.empty()) {
+				err = Common::String::format("line %d: 'triggers' needs <outpath> <level>", lineNo);
+				ok = false;
+				break;
+			}
+			int level = atoi(levelStr.c_str());
+			if (level < 1 || level > 16) {
+				err = Common::String::format("line %d: level %d out of range (1-16)", lineNo, level);
+				ok = false;
+				break;
+			}
+			if (!fireTriggers(vm, level, Common::Path::fromCommandLine(outPath), err)) {
 				err = Common::String::format("line %d: %s", lineNo, err.c_str());
 				ok = false;
 				break;
@@ -467,6 +733,16 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 			_exit(1);
 		}
 		_exit(0);
+	}
+
+	if (!s.fireTriggersPath.empty()) {
+		if (!fireTriggers(vm, s.haveLevel ? s.level : vm->_currentLevel,
+				s.fireTriggersPath, err)) {
+			warning("Screenshot harness: %s", err.c_str());
+			_exit(1);
+		}
+		debug("Screenshot harness: wrote %s",
+			s.fireTriggersPath.toString(Common::Path::kNativeSeparator).c_str());
 	}
 
 	if (!s.dumpStatePath.empty()) {

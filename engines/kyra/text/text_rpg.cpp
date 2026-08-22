@@ -26,6 +26,10 @@
 
 #include "common/system.h"
 
+#ifdef ENABLE_EOB
+#include "kyra/engine/screenshot_harness.h"
+#endif
+
 namespace Kyra {
 
 enum {
@@ -577,6 +581,16 @@ void TextDisplayer_rpg::printDialogueText(const char *str, bool wait) {
 }
 
 void TextDisplayer_rpg::printMessage(const char *str, int textColor, ...) {
+#ifdef ENABLE_EOB
+	// Message rendering is pure presentation, and running it headless is
+	// fragile: the reference harness fires scripts outside the screen
+	// state the text displayer assumes, which segfaults on several
+	// levels. The state snapshot does not capture message text, so
+	// suppressing the render costs the conformance suite nothing.
+	if (ScreenshotHarness::isEnabled())
+		return;
+#endif
+
 	int tc = _textDimData[_screen->curDimIndex()].color1;
 
 	if (textColor != -1)
@@ -631,6 +645,13 @@ void TextDisplayer_rpg::clearCurDim() {
 }
 
 void TextDisplayer_rpg::textPageBreak() {
+#ifdef ENABLE_EOB
+	// Same reason as displayWaitButton(): the page-break prompt waits for
+	// a click that a headless reference run can never deliver.
+	if (ScreenshotHarness::isEnabled())
+		return;
+#endif
+
 	if (_vm->game() != GI_LOL)
 		SWAP(_vm->_dialogueButtonLabelColor1, _vm->_dialogueButtonLabelColor2);
 
@@ -778,6 +799,15 @@ void TextDisplayer_rpg::textPageBreak() {
 }
 
 void TextDisplayer_rpg::displayWaitButton() {
+#ifdef ENABLE_EOB
+	// The reference harness is headless: nobody can dismiss the "more"
+	// button, and the wait loop below spins on processDialogue() until
+	// the engine is asked to quit. A trigger sweep that prints any
+	// message would stall there forever.
+	if (ScreenshotHarness::isEnabled())
+		return;
+#endif
+
 	_vm->_dialogueNumButtons = 1;
 	_vm->_dialogueButtonString[0] = _pageBreakString.c_str();
 	_vm->_dialogueButtonString[1] = 0;

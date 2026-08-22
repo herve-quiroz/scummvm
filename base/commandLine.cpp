@@ -178,8 +178,13 @@ static const char HELP_STRING4[] =
 	"  --eob-dump-state=PATH    [EOB2] Write a canonical engine state snapshot to PATH and exit.\n"
 	"                           Requires --level. Does not need --screenshot.\n"
 	"  --eob-batch=FILE         [EOB2] Run many harness captures in one process. Each line of\n"
-	"                           FILE is 'state <outpath> <level>' or\n"
+	"                           FILE is 'state <outpath> <level>',\n"
+	"                           'triggers <outpath> <level>', or\n"
 	"                           'shot <outpath> <level> <x> <y> <N|E|S|W>'.\n"
+	"  --eob-fire-triggers=PATH [EOB2] Fire every trigger on --level from a clean state and\n"
+	"                           record what each one changed, to PATH.\n"
+	"  --eob-dialog-answers=LIST [EOB2] Comma-separated dialogue button answers, consumed in\n"
+	"                           order. Past the end, answers default to 1.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1152,6 +1157,12 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-batch")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-fire-triggers")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-dialog-answers")
 			END_OPTION
 
 unknownOption:
