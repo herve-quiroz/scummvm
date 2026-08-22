@@ -45,6 +45,7 @@
 #include "graphics/surface.h"
 #include "image/png.h"
 #include "kyra/detection.h"
+#include "kyra/kyra_v1.h"
 #include "kyra/engine/eobcommon.h"
 #include "kyra/graphics/screen.h"
 #include "kyra/script/script_eob.h"
@@ -82,6 +83,31 @@ static void parseDialogueAnswers() {
 			g_dialogueAnswers.push_back(atoi(t.c_str()));
 	}
 }
+
+// Opcode budget for one script run. Sized far above any real EOB2
+// script: the longest observed trigger executes a few dozen opcodes.
+static const uint kScriptOpcodeBudget = 20000;
+static uint g_scriptOpcodes = 0;
+static bool g_scriptTruncated = false;
+
+void ScreenshotHarness::resetScriptBudget() {
+	g_scriptOpcodes = 0;
+	g_scriptTruncated = false;
+}
+
+bool ScreenshotHarness::scriptBudgetExceeded() {
+	if (!isEnabled())
+		return false;
+	if (++g_scriptOpcodes <= kScriptOpcodeBudget)
+		return false;
+	g_scriptTruncated = true;
+	return true;
+}
+
+bool ScreenshotHarness::scriptWasTruncated() {
+	return g_scriptTruncated;
+}
+
 
 bool ScreenshotHarness::nextDialogueAnswer(int &out) {
 	if (!isEnabled())
@@ -447,6 +473,18 @@ void ScreenshotHarness::installHarnessParty(EoBCoreEngine *vm) {
 }
 
 void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
+	// Deliberately not applying --no-actors here. That flag suppresses
+	// actor *rendering*; emptying the monster table makes some scripts
+	// spin forever, and the state snapshot carries no monster data, so a
+	// sweep gains nothing from it.
+	// Seed the RNG so a sweep is reproducible. Several opcodes roll dice
+	// (oeob_printMessage_v2 picks a speaker, oeob_moveInventoryItemToBlock
+	// picks a slot), so without this the same sweep takes different script
+	// branches on different runs: fixtures stop being stable, and a
+	// script that spins does so only intermittently, which is far harder
+	// to diagnose than one that always does.
+	vm->_rnd.setSeed(0x5EED);
+
 	vm->_hasTempDataFlags = 0;
 	vm->_inf->reset();
 	installHarnessParty(vm);
@@ -465,6 +503,11 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 			path.toString(Common::Path::kNativeSeparator).c_str());
 		return false;
 	}
+
+	// Level marker for the opcode trace, so a single batched run with
+	// --debuglevel=3 --debugflags=Script can be split per level as well
+	// as per trigger.
+	debugC(3, kDebugLevelScript, "HARNESS-LEVEL %d", level);
 
 	out.writeString("# eob2-triggers v1\n");
 	out.writeString(Common::String::format("level %d\n", level));
@@ -532,6 +575,16 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 				}
 			}
 
+			// Mark the opcode trace so a caller running with
+			// --debuglevel=3 --debugflags=Script can split ScummVM's own
+			// per-opcode log into per-trigger runs. The log line format
+			// is "[0xNNNN] EoBInfProcessor::oeob_name()", emitted by
+			// EoBInfProcessor::run for every opcode it executes, which
+			// makes it an exact oracle for opcode lengths and control
+			// flow rather than just for end state.
+			debugC(3, kDebugLevelScript, "HARNESS-TRIGGER block=%u invoke=%02x", block, invoke);
+
+			resetScriptBudget();
 			vm->runLevelScript(block, invoke);
 
 			captureTriggerState(vm, after);
@@ -574,6 +627,8 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 						before.doorBlock[i], before.doorState[i],
 						after.doorBlock[i], after.doorState[i]));
 			}
+			if (scriptWasTruncated())
+				out.writeString("  truncated opcode-budget-exceeded\n");
 			if (g_dialoguesAnswered != answeredBefore)
 				out.writeString(Common::String::format(
 					"  dialogues %u\n", g_dialoguesAnswered - answeredBefore));
@@ -588,6 +643,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 	out.writeString(Common::String::format("# %u trigger block(s)\n", blocks.size()));
 	out.finalize();
 	out.close();
+
 	return true;
 }
 

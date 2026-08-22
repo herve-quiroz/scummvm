@@ -24,6 +24,7 @@
 #include "kyra/engine/eobcommon.h"
 #include "kyra/graphics/screen_eob.h"
 #include "kyra/script/script_eob.h"
+#include "kyra/engine/screenshot_harness.h"
 #include "kyra/resource/resource.h"
 #include "kyra/sound/sound.h"
 
@@ -188,6 +189,12 @@ void EoBInfProcessor::run(int func, int flags) {
 	int8 *pos = (int8 *)(_scriptData + o);
 
 	do {
+		// Under the reference harness only: abandon a script that has run
+		// away. Sweeps fire scripts in states the game never produces,
+		// and some of those never terminate.
+		if (ScreenshotHarness::scriptBudgetExceeded())
+			break;
+
 		int8 cmd = *pos++;
 		if (cmd <= _commandMin || cmd >= 0)
 			continue;

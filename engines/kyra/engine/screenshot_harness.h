@@ -111,6 +111,30 @@ public:
 	static bool nextDialogueAnswer(int &out);
 
 	/**
+	 * Report whether the script currently running has exceeded the
+	 * harness's opcode budget, and should be abandoned.
+	 *
+	 * EoBInfProcessor::run has no step limit: it runs until a script
+	 * ends or aborts. That is fine in play, where every reachable script
+	 * terminates, but a trigger sweep fires scripts in states the game
+	 * never produces (any block, any invocation kind, an emptied monster
+	 * table) and some of those spin forever. A sweep that hangs on one
+	 * script yields nothing at all, so the budget trades a truncated
+	 * record of one trigger for a complete record of the rest.
+	 *
+	 * @returns false when no harness mode is active, so normal play is
+	 *          never subject to a limit.
+	 */
+	static bool scriptBudgetExceeded();
+
+	/** Reset the opcode budget before running one script. */
+	static void resetScriptBudget();
+
+
+	/** @returns true if the last script was cut short by the budget. */
+	static bool scriptWasTruncated();
+
+	/**
 	 * Write a canonical engine state snapshot for the currently loaded
 	 * level to @p path.
 	 *
