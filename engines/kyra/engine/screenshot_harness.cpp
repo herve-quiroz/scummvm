@@ -37,18 +37,26 @@
 
 #include "common/config-manager.h"
 #include "common/file.h"
+#include "common/fs.h"
 #include "common/str.h"
 #include "common/textconsole.h"
+#include "common/tokenizer.h"
 #include "graphics/surface.h"
 #include "image/png.h"
 #include "kyra/detection.h"
 #include "kyra/engine/eobcommon.h"
 #include "kyra/graphics/screen.h"
+#include "kyra/script/script_eob.h"
 
 namespace Kyra {
 
+static bool haveSetting(const char *key) {
+	return ConfMan.hasKey(key) && !ConfMan.get(key).empty();
+}
+
 bool ScreenshotHarness::isEnabled() {
-	return ConfMan.hasKey("screenshot") && !ConfMan.get("screenshot").empty();
+	return haveSetting("screenshot") || haveSetting("eob_dump_state")
+		|| haveSetting("eob_batch");
 }
 
 static bool parseFacing(const Common::String &raw, uint8 &out) {
@@ -64,11 +72,27 @@ static bool parseFacing(const Common::String &raw, uint8 &out) {
 }
 
 bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
-	if (!ConfMan.hasKey("screenshot") || ConfMan.get("screenshot").empty()) {
-		err = "--screenshot=PATH is required";
+	const bool haveShot = haveSetting("screenshot");
+	const bool haveDump = haveSetting("eob_dump_state");
+	const bool haveBatch = haveSetting("eob_batch");
+
+	if (!haveShot && !haveDump && !haveBatch) {
+		err = "one of --screenshot=PATH, --eob-dump-state=PATH or --eob-batch=FILE is required";
 		return false;
 	}
-	out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
+	if (haveShot)
+		out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
+	if (haveDump)
+		out.dumpStatePath = Common::Path::fromCommandLine(ConfMan.get("eob_dump_state"));
+	if (haveBatch)
+		out.batchPath = Common::Path::fromCommandLine(ConfMan.get("eob_batch"));
+
+	// A batch script carries the level, cell and facing for every capture
+	// on its own lines, so the command line does not have to. A state dump
+	// needs a level but no viewpoint, because a snapshot describes the
+	// whole level rather than what the party can see.
+	const bool needLevel = !haveBatch;
+	const bool needPosition = haveShot && !haveBatch;
 
 	// Save slot is optional. ScummVM's standard --save-slot=N (alias -x N)
 	// populates ConfMan["save_slot"] (default -1 meaning "no save"). When
@@ -90,7 +114,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 			return false;
 		}
 		out.level = (uint8)level;
-	} else if (!haveSave) {
+	} else if (needLevel && !haveSave) {
 		err = "--level=N is required (or pass --save-slot=N)";
 		return false;
 	}
@@ -110,7 +134,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	} else if (haveCellX != haveCellY) {
 		err = "--cell=X,Y must specify both X and Y";
 		return false;
-	} else if (!haveSave) {
+	} else if (needPosition && !haveSave) {
 		err = "--cell=X,Y is required (or pass --save-slot=N)";
 		return false;
 	}
@@ -123,7 +147,7 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 				ConfMan.get("facing").c_str());
 			return false;
 		}
-	} else if (!haveSave) {
+	} else if (needPosition && !haveSave) {
 		err = "--facing=N|E|S|W is required (or pass --save-slot=N)";
 		return false;
 	}
@@ -133,24 +157,19 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	return true;
 }
 
-void ScreenshotHarness::run(EoBCoreEngine *vm) {
-	Settings s;
-	Common::String err;
-	if (!parseSettings(s, err)) {
-		warning("Screenshot harness: %s", err.c_str());
-		_exit(1);
-	}
+static const char *const kFacingNames[4] = { "N", "E", "S", "W" };
 
-	// Refuse to run on anything other than EOB2. The renderer paths
-	// and resource layout for EOB1 differ enough that sharing one
-	// harness would be brittle.
-	if (vm->_flags.gameID != GI_EOB2) {
-		warning("Screenshot harness: target must be Eye of the Beholder II "
-			"(got gameID=%d)", vm->_flags.gameID);
-		_exit(1);
+void ScreenshotHarness::gotoPosition(EoBCoreEngine *vm, uint8 level, uint8 x, uint8 y, uint8 facing) {
+	if (level != vm->_currentLevel) {
+		vm->_currentLevel = level;
+		vm->_currentSub = 0;
+		vm->loadLevel(level, 0);
 	}
+	vm->_currentBlock = (uint16)y * 32u + (uint16)x;
+	vm->_currentDirection = facing;
+}
 
-	// --- bootstrap ---
+void ScreenshotHarness::bootstrap(EoBCoreEngine *vm, const Settings &s) {
 	// Two paths depending on whether a save slot was requested:
 	//
 	//   * No save (the default): mirror EoBEngine::startupNew, then load
@@ -161,7 +180,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	//   * With --save-slot=N: restore the save's full state via
 	//     loadGameState(). This brings back party, level, monster
 	//     positions, decoration toggles (open doors, pulled levers,
-	//     etc.) — anything the engine persists. After load, apply
+	//     etc.) - anything the engine persists. After load, apply
 	//     level/cell/facing overrides if those flags were given on the
 	//     CLI; otherwise capture from the save's own position.
 
@@ -197,11 +216,13 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		// the portrait code may crash or render garbage.
 		vm->startupNew();
 
-		vm->_currentLevel = s.level;
+		vm->_currentLevel = s.haveLevel ? s.level : 1;
 		vm->_currentSub = 0;
-		vm->loadLevel(s.level, 0);
-		vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
-		vm->_currentDirection = s.facing;
+		vm->loadLevel(vm->_currentLevel, 0);
+		if (s.haveCell)
+			vm->_currentBlock = (uint16)s.cellY * 32u + (uint16)s.cellX;
+		if (s.haveFacing)
+			vm->_currentDirection = s.facing;
 		vm->setHandItem(0);
 	}
 
@@ -211,12 +232,69 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	// drawMonsters pass skips them without disturbing wall/decoration
 	// draw paths.
 	if (s.noActors) {
-		for (int i = 0; i < 30; ++i) {
+		for (int i = 0; i < 30; ++i)
 			vm->_monsters[i].block = 0;
-		}
+	}
+}
+
+bool ScreenshotHarness::writeStateSnapshot(EoBCoreEngine *vm, const Common::Path &path,
+		Common::String &err) {
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		err = Common::String::format("cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
 	}
 
-	// --- draw the frame ---
+	// Header carries a format version so a GridDelve-side reader can
+	// refuse a snapshot it does not understand rather than silently
+	// misparsing one.
+	out.writeString("# eob2-state v1\n");
+	out.writeString(Common::String::format("level %d\n", vm->_currentLevel));
+	out.writeString(Common::String::format("party %d %d %s\n",
+		vm->_currentBlock & 0x1F, (vm->_currentBlock >> 5) & 0x1F,
+		kFacingNames[vm->_currentDirection & 3]));
+
+	// Script flags: 18 words, index 17 being the global set that
+	// setFlags/clearFlags operate on. The mask API cannot enumerate
+	// them, hence the friend declaration on EoBInfProcessor.
+	Common::String flags("flags");
+	for (int i = 0; i < 18; ++i)
+		flags += Common::String::format(" %08x", vm->_inf->_flagTable[i]);
+	flags += "\n";
+	out.writeString(flags);
+
+	// Wall-type properties, indexed by wall type rather than by block.
+	// Bit 0 of each entry is what decides passability, so this table
+	// plus the per-block wall types is the whole movement input.
+	Common::String wf("wallflags");
+	for (int i = 0; i < 256; ++i)
+		wf += Common::String::format(" %02x", vm->_wllWallFlags[i]);
+	wf += "\n";
+	out.writeString(wf);
+
+	for (int i = 0; i < 3; ++i)
+		out.writeString(Common::String::format("door %d %u %d %d\n", i,
+			vm->_openDoorState[i].block, vm->_openDoorState[i].wall,
+			vm->_openDoorState[i].state));
+
+	// One line per block, in block order. assignedObjects is the offset
+	// of the block's trigger script, so this doubles as the trigger
+	// enumeration both engines must agree on.
+	for (int i = 0; i < 1024; ++i) {
+		const LevelBlockProperty &b = vm->_levelBlockProperties[i];
+		out.writeString(Common::String::format("block %d %d %d %d %d %04x %04x %04x %d\n",
+			i, b.walls[0], b.walls[1], b.walls[2], b.walls[3],
+			b.flags, b.assignedObjects, b.drawObjects, b.direction));
+	}
+
+	out.finalize();
+	out.close();
+	return true;
+}
+
+bool ScreenshotHarness::writeFrame(EoBCoreEngine *vm, const Common::Path &path,
+		Common::String &err) {
 	// drawScene() renders the 3D viewport into the back buffer.
 	// gui_drawAllCharPortraitsWithStats() renders the right-side HUD.
 	vm->drawScene(1);
@@ -228,12 +306,11 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	// at the end of a normal frame.
 	vm->_screen->updateScreen();
 
-	// --- save the frame ---
 	Common::DumpFile out;
-	if (!out.open(s.screenshotPath)) {
-		warning("Screenshot harness: cannot open '%s' for writing",
-			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
-		_exit(1);
+	if (!out.open(path)) {
+		err = Common::String::format("cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
 	}
 
 	// Read the palette from the engine's own copy rather than the SDL
@@ -258,15 +335,157 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		pageBuf, Graphics::PixelFormat::createFormatCLUT8());
 
 	if (!Image::writePNG(out, surf, palette)) {
-		warning("Screenshot harness: writePNG failed for '%s'",
-			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+		err = Common::String::format("writePNG failed for '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
 		out.close();
-		_exit(1);
+		return false;
 	}
 
 	out.close();
-	debug("Screenshot harness: wrote %s",
-		s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+	return true;
+}
+
+bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
+		Common::String &err) {
+	Common::FSNode node(path);
+	Common::SeekableReadStream *in = node.createReadStream();
+	if (!in) {
+		err = Common::String::format("cannot read batch file '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	int lineNo = 0;
+	int captured = 0;
+	bool ok = true;
+
+	while (!in->eos()) {
+		Common::String line = in->readLine();
+		++lineNo;
+		line.trim();
+		if (line.empty() || line[0] == '#')
+			continue;
+
+		Common::StringTokenizer tok(line, " \t");
+		Common::String cmd = tok.nextToken();
+
+		if (cmd == "state") {
+			Common::String outPath = tok.nextToken();
+			Common::String levelStr = tok.nextToken();
+			if (outPath.empty() || levelStr.empty()) {
+				err = Common::String::format("line %d: 'state' needs <outpath> <level>", lineNo);
+				ok = false;
+				break;
+			}
+			int level = atoi(levelStr.c_str());
+			if (level < 1 || level > 16) {
+				err = Common::String::format("line %d: level %d out of range (1-16)", lineNo, level);
+				ok = false;
+				break;
+			}
+			// A state dump describes the whole level, so the viewpoint
+			// is irrelevant; park the party at a fixed block so the
+			// snapshot's party line stays deterministic.
+			gotoPosition(vm, (uint8)level, 0, 0, 0);
+			if (!writeStateSnapshot(vm, Common::Path::fromCommandLine(outPath), err)) {
+				err = Common::String::format("line %d: %s", lineNo, err.c_str());
+				ok = false;
+				break;
+			}
+			++captured;
+		} else if (cmd == "shot") {
+			Common::String outPath = tok.nextToken();
+			Common::String levelStr = tok.nextToken();
+			Common::String xStr = tok.nextToken();
+			Common::String yStr = tok.nextToken();
+			Common::String facingStr = tok.nextToken();
+			uint8 facing = 0;
+			if (outPath.empty() || levelStr.empty() || xStr.empty() || yStr.empty()
+					|| !parseFacing(facingStr, facing)) {
+				err = Common::String::format(
+					"line %d: 'shot' needs <outpath> <level> <x> <y> <N|E|S|W>", lineNo);
+				ok = false;
+				break;
+			}
+			int level = atoi(levelStr.c_str());
+			int x = atoi(xStr.c_str());
+			int y = atoi(yStr.c_str());
+			if (level < 1 || level > 16 || x < 0 || x > 31 || y < 0 || y > 31) {
+				err = Common::String::format("line %d: level/cell out of range", lineNo);
+				ok = false;
+				break;
+			}
+			gotoPosition(vm, (uint8)level, (uint8)x, (uint8)y, facing);
+			// loadLevel repopulates the monster table, so actor
+			// suppression has to be reapplied per capture rather than
+			// once during bootstrap.
+			if (ConfMan.hasKey("no_actors") && ConfMan.getBool("no_actors")) {
+				for (int i = 0; i < 30; ++i)
+					vm->_monsters[i].block = 0;
+			}
+			if (!writeFrame(vm, Common::Path::fromCommandLine(outPath), err)) {
+				err = Common::String::format("line %d: %s", lineNo, err.c_str());
+				ok = false;
+				break;
+			}
+			++captured;
+		} else {
+			err = Common::String::format("line %d: unknown command '%s'", lineNo, cmd.c_str());
+			ok = false;
+			break;
+		}
+	}
+
+	delete in;
+	if (ok)
+		debug("Screenshot harness: batch produced %d capture(s)", captured);
+	return ok;
+}
+
+void ScreenshotHarness::run(EoBCoreEngine *vm) {
+	Settings s;
+	Common::String err;
+	if (!parseSettings(s, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+
+	// Refuse to run on anything other than EOB2. The renderer paths
+	// and resource layout for EOB1 differ enough that sharing one
+	// harness would be brittle.
+	if (vm->_flags.gameID != GI_EOB2) {
+		warning("Screenshot harness: target must be Eye of the Beholder II "
+			"(got gameID=%d)", vm->_flags.gameID);
+		_exit(1);
+	}
+
+	bootstrap(vm, s);
+
+	if (!s.batchPath.empty()) {
+		if (!runBatch(vm, s.batchPath, err)) {
+			warning("Screenshot harness: %s", err.c_str());
+			_exit(1);
+		}
+		_exit(0);
+	}
+
+	if (!s.dumpStatePath.empty()) {
+		if (!writeStateSnapshot(vm, s.dumpStatePath, err)) {
+			warning("Screenshot harness: %s", err.c_str());
+			_exit(1);
+		}
+		debug("Screenshot harness: wrote %s",
+			s.dumpStatePath.toString(Common::Path::kNativeSeparator).c_str());
+	}
+
+	if (!s.screenshotPath.empty()) {
+		if (!writeFrame(vm, s.screenshotPath, err)) {
+			warning("Screenshot harness: %s", err.c_str());
+			_exit(1);
+		}
+		debug("Screenshot harness: wrote %s",
+			s.screenshotPath.toString(Common::Path::kNativeSeparator).c_str());
+	}
 
 	_exit(0);
 }

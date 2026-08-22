@@ -59,6 +59,19 @@ class ScreenshotHarness {
 public:
 	struct Settings {
 		Common::Path screenshotPath;
+
+		// Canonical state snapshot output. Empty means "not requested".
+		// When set, --screenshot becomes optional: a state dump needs no
+		// rendered frame.
+		Common::Path dumpStatePath;
+
+		// Batch script. Empty means "not requested". Each line is one
+		// capture, letting a whole level set be produced by a single
+		// process. That matters because ScummVM's shutdown path stalls
+		// for roughly 85 seconds after the harness finishes, so
+		// per-capture invocation is prohibitively slow in bulk.
+		Common::Path batchPath;
+
 		uint8 level;
 		uint8 cellX;
 		uint8 cellY;
@@ -77,8 +90,26 @@ public:
 		bool haveFacing;
 	};
 
-	/** @returns true if --screenshot was supplied on the command line. */
+	/**
+	 * @returns true if any harness mode was requested on the command
+	 *          line (--screenshot, --eob-dump-state or --eob-batch).
+	 */
 	static bool isEnabled();
+
+	/**
+	 * Write a canonical engine state snapshot for the currently loaded
+	 * level to @p path.
+	 *
+	 * The snapshot is the shared primitive behind movement, passability
+	 * and trigger conformance: GridDelve emits the same format, and each
+	 * conformance test is a diff of two snapshots. It is deliberately
+	 * line-oriented, ordered and free of timestamps or absolute paths so
+	 * that a diff points at engine state rather than at formatting.
+	 *
+	 * @returns false and sets @p err if the file cannot be written.
+	 */
+	static bool writeStateSnapshot(EoBCoreEngine *vm, const Common::Path &path,
+		Common::String &err);
 
 	/**
 	 * Parse and validate harness settings from ConfMan.
@@ -88,10 +119,23 @@ public:
 	static bool parseSettings(Settings &out, Common::String &err);
 
 	/**
-	 * Execute the harness: bootstrap engine state, draw one frame,
-	 * write PNG, exit. Never returns.
+	 * Execute the harness: bootstrap engine state, produce whatever the
+	 * requested mode asks for, exit. Never returns.
 	 */
 	static void run(EoBCoreEngine *vm);
+
+private:
+	/** Bootstrap party/level state for a fresh (non-save) capture. */
+	static void bootstrap(EoBCoreEngine *vm, const Settings &s);
+
+	/** Load @p level and point the party at (@p x, @p y) facing @p facing. */
+	static void gotoPosition(EoBCoreEngine *vm, uint8 level, uint8 x, uint8 y, uint8 facing);
+
+	/** Render the current scene and write it to @p path as a PNG. */
+	static bool writeFrame(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+
+	/** Execute a batch script. @returns false and sets @p err on failure. */
+	static bool runBatch(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
 };
 
 } // End of namespace Kyra

@@ -66,11 +66,71 @@ ConfMan keys: `mm_side`, `mm_no_border_anims`, `mm_log_slots`, `mm_pin_anim_fram
 
 ## KYRA/EOB2-specific flags
 
-The KYRA harness reuses ScummVM's stock `--save-slot` flag.
+The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--eob-*` namespace.
 
 | Flag | Required | Format | Description |
 |------|----------|--------|-------------|
 | `--save-slot` (alias `-x`) | no (default -1) | integer save slot | Restore the given save instead of doing a fresh-game bootstrap. When `--save-slot=N` is supplied, `--level`, `--cell`, and `--facing` become optional post-load overrides; omit them to capture the save's recorded position. This is how state-dependent scenes (open doors, pulled levers, scripted decoration changes) are captured for diffing. |
+| `--eob-dump-state` | no | absolute filesystem path | Write a canonical engine state snapshot (see below) and exit. Requires `--level`; `--cell` and `--facing` are optional, because a snapshot describes the whole level rather than a viewpoint. Does not require `--screenshot`; if both are given, both outputs are produced. |
+| `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
+
+ConfMan keys: `eob_dump_state`, `eob_batch`.
+
+### State snapshots
+
+`--eob-dump-state=PATH` writes a line-oriented, deterministic text snapshot of engine
+state. It is the shared primitive behind griddelve's movement, passability and trigger
+conformance tests: griddelve emits the same format, and each conformance test is a diff
+of two snapshots. The format is ordered and free of timestamps and absolute paths, so a
+diff points at engine state rather than at formatting.
+
+```
+# eob2-state v1
+level 4
+party 15 10 N
+flags <18 words, 8 hex digits each>
+wallflags <256 bytes, 2 hex digits each>
+door <i> <block> <wall> <state>          (3 lines, one per OpenDoorState slot)
+block <idx> <w0> <w1> <w2> <w3> <flags> <assignedObjects> <drawObjects> <dir>
+```
+
+`wallflags` is `_wllWallFlags`, indexed by wall type; bit 0 decides passability, so that
+table plus the per-block wall types is the entire movement input. `assignedObjects` is
+the offset of the block's trigger script, so the `block` lines double as the trigger
+enumeration both engines must agree on.
+
+Reading `_flagTable` requires a `friend class ScreenshotHarness` declaration on
+`EoBInfProcessor`: the public `setFlags`/`checkFlags` mask API cannot enumerate flags.
+
+### Batch mode
+
+ScummVM's shutdown path never reaches the harness's `_exit(0)` (see "Known issues"), so
+every invocation costs a wall-clock timeout regardless of how fast the capture itself is.
+At the scale griddelve's conformance suite needs (1005 triggers plus several hundred
+render cases) per-capture invocation is prohibitive. `--eob-batch=FILE` processes many
+captures in a single process instead.
+
+Each non-empty, non-`#` line of FILE is one capture:
+
+```
+state <outpath> <level>
+shot  <outpath> <level> <x> <y> <N|E|S|W>
+```
+
+`state` parks the party at block (0,0) facing north before dumping, so the snapshot's
+`party` line stays deterministic. `shot` honours `--no-actors`, reapplying actor
+suppression after each level load (`loadLevel` repopulates the monster table).
+
+A batch `shot` produces a byte-identical PNG to the equivalent single `--screenshot`
+invocation; verified against griddelve's committed reference set.
+
+Example, capturing every level's state in one process:
+
+```bash
+printf 'state /tmp/L%d.state %d\n' 1 1 > /tmp/batch.txt
+./scummvm --path="/path/to/EOB2/" --music-driver=null -m 0 -s 0 -r 0 \
+    --eob-batch=/tmp/batch.txt --no-actors eob2
+```
 
 The KYRA harness refuses to run on anything other than EOB2 (`gameID == GI_EOB2`). EOB1 is rejected because the renderer paths and resource layout differ enough that sharing one harness would be brittle.
 
@@ -110,7 +170,38 @@ Example: turn left twice, step forward, then press Space at Vertigo cell (13,15)
 
 Produces `/tmp/replay.000.png` ... `/tmp/replay.004.png` plus `/tmp/replay.trace.txt`.
 
-KYRA/EOB2 has no equivalent input-replay mode. The current griddelve workflow captures one frame per invocation; if replay becomes needed, the KYRA harness would have to grow its own.
+KYRA/EOB2 has no equivalent input-replay mode yet. It is planned as the next slice of
+griddelve's conformance work, alongside a trigger-firing mode; both will build on the
+state snapshot described above rather than on per-step PNGs alone.
+
+## Known issues
+
+The KYRA harness never terminates on its own, and its output only reaches disk when the
+process dies. Measured behaviour: the expected file appears at exactly the moment the
+process is killed, for every timeout value tried (20s, 30s, 90s, 120s), and its contents
+are byte-identical regardless. So `timeout` is not a safety net bolted onto a slow
+harness; it is how the capture completes.
+
+The practical contract for KYRA callers is therefore:
+
+* Wrap every invocation in `timeout N`.
+* Treat exit code 124 as success when the expected output files exist and are non-empty.
+* Keep N small. A 15-level `--eob-batch` state capture plus a PNG produced all 16 outputs
+  under `timeout 20`, byte-identical to the same batch under `timeout 120`. The extra
+  time is pure stall.
+
+`scripts/capture-scummvm-refs.sh` in griddelve already follows this contract. Batch mode
+exists mainly to pay the stall once per batch instead of once per capture.
+
+This is pre-existing, reproducible with a plain `--screenshot` invocation, and not
+introduced by `--eob-dump-state` or `--eob-batch`. Switching the harness's final
+`_exit(0)` to `exit(0)` does not change it. **The MM/Xeen harness is not affected** and
+exits 0 promptly, so whatever holds the process open is specific to the EOB2 shutdown
+path. The root cause has not been diagnosed.
+
+When diagnosing, poll for the expected output file rather than reading the log: stderr is
+block-buffered when redirected, so log lines also only appear at process death, which
+makes it easy to misattribute the stall to whichever flag was added last.
 
 ## Source pointers
 
@@ -128,6 +219,7 @@ KYRA/EOB2 has no equivalent input-replay mode. The current griddelve workflow ca
 ### KYRA/EOB2
 
 * Harness module: `engines/kyra/engine/screenshot_harness.{h,cpp}`.
+* Script flag table access: `friend class ScreenshotHarness` on `EoBInfProcessor` in `engines/kyra/script/script_eob.h`.
 * Engine hook: `engines/kyra/engine/eobcommon.cpp`, in `EoBCoreEngine::go()` (just after `loadItemDefs()`).
 * Friend declarations for engine state access: `engines/kyra/engine/eobcommon.h`, `engines/kyra/engine/kyra_rpg.h`.
 

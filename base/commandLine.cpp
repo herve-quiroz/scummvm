@@ -175,6 +175,11 @@ static const char HELP_STRING4[] =
 	"  --mm-screenshot-prefix=PATH  [MM/Xeen] Path prefix for per-step PNGs written by --mm-input-script.\n"
 	"                           Files are <prefix>.NNN.png plus <prefix>.trace.txt.\n"
 	"  --mm-scale-test=DIR      [MM/Xeen] Dump SpriteResource scaler reference PNGs to DIR and exit.\n"
+	"  --eob-dump-state=PATH    [EOB2] Write a canonical engine state snapshot to PATH and exit.\n"
+	"                           Requires --level. Does not need --screenshot.\n"
+	"  --eob-batch=FILE         [EOB2] Run many harness captures in one process. Each line of\n"
+	"                           FILE is 'state <outpath> <level>' or\n"
+	"                           'shot <outpath> <level> <x> <y> <N|E|S|W>'.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1141,6 +1146,12 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("mm-scale-test")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-dump-state")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-batch")
 			END_OPTION
 
 unknownOption:

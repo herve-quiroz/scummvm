@@ -33,6 +33,11 @@ namespace Kyra {
 class KyraRpgEngine;
 
 class EoBInfProcessor {
+// The reference-capture harness reads _flagTable directly so a state
+// snapshot can record script flags without going through the
+// setFlags/checkFlags mask API, which cannot enumerate them.
+friend class ScreenshotHarness;
+
 public:
 	EoBInfProcessor(EoBCoreEngine *engine, Screen_EoB *_screen);
 	~EoBInfProcessor();
