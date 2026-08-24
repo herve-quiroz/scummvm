@@ -502,6 +502,17 @@ void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
 		vm->_openDoorState[i].wall = 0;
 	}
 
+	// The item table is game-wide state that a level load does not
+	// touch: createItem appends to it, deleteItem and the item moves
+	// rewrite it, and a created item left in the hand stays there.
+	// Without this, a firing that creates an item changes what every
+	// later firing finds on its blocks and in the party's hand. Reload
+	// the table the game ships and empty the hand, which is item 0, the
+	// table's dummy record, as the screenshot path leaves it.
+	vm->loadItemDefs();
+	vm->_itemInHand = 0;
+	vm->_lastUsedItem = 0;
+
 	installHarnessParty(vm);
 	vm->_currentLevel = level;
 	vm->_currentSub = 0;

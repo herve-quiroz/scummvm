@@ -142,6 +142,13 @@ door finishes animating, and neither happens under the harness. Left alone, a fi
 opened a door leaves the block registered, and the next firing to work that door reads it
 as one already in motion and reverses it instead.
 
+The item table is reloaded from the game files alongside, and the hand emptied, because a
+level load leaves both alone: `createItem` appends to the table, `deleteItem` and the
+item moves rewrite it, and an item created into the hand stays there. Left alone, a
+firing that creates an item changes what every later firing in the sweep finds on its
+blocks and in the party's hand. An empty hand is item 0, the table's dummy record, which
+is what the screenshot path leaves it at.
+
 Setting `EOB_TRIG_PROGRESS=/path` writes the current trigger to that file, rewritten and
 closed per firing. The main output is buffered, so if a script hangs or crashes this file
 is the only record of which trigger was responsible. It is a debugging aid, not part of
