@@ -136,6 +136,12 @@ The level is fully reloaded between firings, with `_hasTempDataFlags` cleared fi
 otherwise `loadBlockProperties` restores the modified block table instead of re-reading
 the maze, and the previous trigger's edits leak into the next one's baseline.
 
+The door animation slots are cleared alongside it, for the same reason and because
+nothing else does it: `completeDoorOperations` empties them when the party moves or a
+door finishes animating, and neither happens under the harness. Left alone, a firing that
+opened a door leaves the block registered, and the next firing to work that door reads it
+as one already in motion and reverses it instead.
+
 Setting `EOB_TRIG_PROGRESS=/path` writes the current trigger to that file, rewritten and
 closed per firing. The main output is buffered, so if a script hangs or crashes this file
 is the only record of which trigger was responsible. It is a debugging aid, not part of
