@@ -487,6 +487,21 @@ void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
 
 	vm->_hasTempDataFlags = 0;
 	vm->_inf->reset();
+
+	// Nothing clears the door animation slots on a level load: they are
+	// emptied by completeDoorOperations, which runs when the party moves
+	// or a door finishes animating, and neither happens under the
+	// harness. Without this, a trigger that opened a door leaves the
+	// block registered for the next trigger, which then reads it as a
+	// door already in motion and does the opposite, or nothing. That
+	// makes a firing's recorded deltas depend on which firings came
+	// before it, which is exactly what a per-firing reset is for.
+	for (int i = 0; i < 3; ++i) {
+		vm->_openDoorState[i].block = 0;
+		vm->_openDoorState[i].state = 0;
+		vm->_openDoorState[i].wall = 0;
+	}
+
 	installHarnessParty(vm);
 	vm->_currentLevel = level;
 	vm->_currentSub = 0;
