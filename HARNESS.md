@@ -113,7 +113,7 @@ step-off, `0x40` wall click), skipping kinds the block's own flags do not admit;
 gates on `subFlags = ((blockFlags & 0xFFF8) >> 3) | 0xE0`.
 
 ```
-# eob2-triggers v1
+# eob2-triggers v2
 level 4
 trigger <block> <x> <y> flags=<hex4> script=<hex4> invoke=<hex2>
   wall <block> <dir> <old> -> <new>
@@ -122,6 +122,11 @@ trigger <block> <x> <y> flags=<hex4> script=<hex4> invoke=<hex2>
   level <old> -> <new>
   door <slot> <block>/<state> -> <block>/<state>
   walls-not-compared level-changed
+  item <idx> <where> <type>/<value>/<flags>/<icon> -> <where> <type>/<value>/<flags>/<icon>
+  items <block> <list> -> <list>
+  hand <old> -> <new>
+  truncated opcode-budget-exceeded
+  truncated flight-budget-exceeded
   dialogues <n>
   end
 # <n> trigger block(s)
@@ -131,6 +136,46 @@ Only deltas are recorded, so a trigger that changes nothing is two lines. A trig
 switches level leaves the block table describing a different map, so the wall and door
 diffs are replaced by `walls-not-compared level-changed`; without that, one such trigger
 emits over a thousand meaningless lines.
+
+`item` records one line per item-table index whose record changed, in ascending index
+order. `<where>` is `<level>:<block>:<pos>` in decimal (`block` and `pos` signed), and
+the payload is `type`, `value` and `icon` in signed decimal with `flags` as two lowercase
+hex digits. A record whose `block` is `-1` is shown as the bare word `free` with no
+payload; a record the firing appended to the table has no before side and reads as
+`free` there. Two records compare equal when both are free, or when level, block, pos,
+type, value, flags and icon all match; `next` and `prev` are not compared, because the
+`items` line covers order. Note that `duplicateItem` copies the template record, so an
+item created into the hand or a character's pack keeps the template's location (usually
+`0:0:0`) until something calls `setItemPosition`; `free` is only `block == -1`. The record
+table is game-wide, so `item` lines are still emitted when the firing changed level.
+
+`items` records one line per block whose item list changed, in ascending block order.
+`<list>` is the walk the engine itself does in `countQueuedItems`: from the block's
+`drawObjects` head along `prev` until it returns to the head, indices comma-separated
+with no spaces, or the single character `-` for an empty list. Two lists are equal when
+they hold the same indices in the same order, so a reordering shows up as well as an
+addition or removal. The walk is bounded at 1024 steps against a corrupt ring. Like the
+wall diff, `items` lines are skipped when the firing changed level, because the block
+table then describes another map.
+
+`hand` is `_itemInHand` before and after, emitted only when it changed. `0` is the empty
+hand, the table's dummy record.
+
+Within a firing the new lines follow the `door` lines: all `item` lines, then all `items`
+lines, then `hand`, then the `truncated` and `dialogues` lines and `end`.
+
+A script that launches an item (`oeob_launchObject`) parks it in a flying-object slot on
+its start block at `pos | 4`; the game flies it from `timerProcessFlyingObjects`, a timer
+that never ticks under the harness. The sweep drains the flights after the script
+returns and before the after state is captured, calling that timer handler while any slot
+is enabled, so the reference records where the item lands and the crossing (`0x10`) and
+landing (`4`) scripts it fires on the way rather than an item hovering over its launch
+block. The drain is bounded at 64 passes, because a landing script can launch again and a
+magic object with unlimited range only stops at a wall; a firing that hits the bound with
+a flight still enabled records `truncated flight-budget-exceeded`, the sibling of the
+opcode-budget line. The flying-object slots are also cleared in the per-firing reset, for
+the same reason as the door slots: nothing on the level load path empties them, and a
+flight left enabled would otherwise land during the next firing's drain.
 
 The level is fully reloaded between firings, with `_hasTempDataFlags` cleared first:
 otherwise `loadBlockProperties` restores the modified block table instead of re-reading

@@ -22,6 +22,7 @@
 #ifndef KYRA_ENGINE_SCREENSHOT_HARNESS_H
 #define KYRA_ENGINE_SCREENSHOT_HARNESS_H
 
+#include "common/array.h"
 #include "common/path.h"
 #include "common/scummsys.h"
 #include "common/str.h"
@@ -189,6 +190,23 @@ private:
 	 * friendship with the engine classes.
 	 */
 	struct TriggerState {
+		/**
+		 * One record of the item table. Mirrors the EoBItem fields a
+		 * script can change plus `prev`, the link the per-block item
+		 * lists are walked along; `next` and the name indices are left
+		 * out because no delta line reads them.
+		 */
+		struct ItemSnapshot {
+			uint8 level;
+			int16 block;
+			int8 pos;
+			int8 type;
+			int8 value;
+			uint8 flags;
+			int8 icon;
+			int16 prev;
+		};
+
 		uint8 walls[1024][4];
 		uint32 flags[18];
 		uint8 level;
@@ -196,10 +214,19 @@ private:
 		uint16 direction;
 		int8 doorState[3];
 		uint16 doorBlock[3];
+		Common::Array<ItemSnapshot> items;
+		uint16 drawObjects[1024];
+		int hand;
 	};
 
 	/** Copy the engine's current trigger-visible state into @p out. */
 	static void captureTriggerState(EoBCoreEngine *vm, TriggerState &out);
+
+	/** Item-table helpers for the `item` and `items` delta lines. */
+	static bool itemIsFree(const TriggerState &st, uint idx);
+	static bool sameItem(const TriggerState &a, const TriggerState &b, uint idx);
+	static Common::String itemSide(const TriggerState &st, uint idx);
+	static void blockItemList(const TriggerState &st, int block, Common::Array<uint16> &out);
 
 	/** Reload @p level so each trigger fires against identical state. */
 	static void resetLevel(EoBCoreEngine *vm, int level);

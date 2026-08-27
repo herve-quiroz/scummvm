@@ -429,6 +429,96 @@ void ScreenshotHarness::captureTriggerState(EoBCoreEngine *vm, TriggerState &out
 		out.doorState[i] = vm->_openDoorState[i].state;
 		out.doorBlock[i] = vm->_openDoorState[i].block;
 	}
+	out.items.resize(vm->_items.size());
+	for (uint i = 0; i < vm->_items.size(); ++i) {
+		const EoBItem &src = vm->_items[i];
+		TriggerState::ItemSnapshot &dst = out.items[i];
+		dst.level = src.level;
+		dst.block = src.block;
+		dst.pos = src.pos;
+		dst.type = src.type;
+		dst.value = src.value;
+		dst.flags = src.flags;
+		dst.icon = src.icon;
+		dst.prev = src.prev;
+	}
+	for (int i = 0; i < 1024; ++i)
+		out.drawObjects[i] = vm->_levelBlockProperties[i].drawObjects;
+	out.hand = vm->_itemInHand;
+}
+
+// A record is free when its block is -1. Picking an item up into the
+// hand or a pack also sets -1, so those read as free too, while an item
+// created straight into the hand keeps its template's block (duplicateItem
+// copies the record and only setItemPosition writes a block); the `hand`
+// line is what names the hand item either way.
+bool ScreenshotHarness::itemIsFree(const TriggerState &st, uint idx) {
+	return idx >= st.items.size() || st.items[idx].block == -1;
+}
+
+bool ScreenshotHarness::sameItem(const TriggerState &a, const TriggerState &b, uint idx) {
+	const bool fa = itemIsFree(a, idx);
+	const bool fb = itemIsFree(b, idx);
+	if (fa || fb)
+		return fa == fb;
+	const TriggerState::ItemSnapshot &x = a.items[idx];
+	const TriggerState::ItemSnapshot &y = b.items[idx];
+	return x.level == y.level && x.block == y.block && x.pos == y.pos
+		&& x.type == y.type && x.value == y.value && x.flags == y.flags
+		&& x.icon == y.icon;
+}
+
+// One side of an `item` line: the bare word `free`, or
+// `<level>:<block>:<pos> <type>/<value>/<flags>/<icon>`.
+Common::String ScreenshotHarness::itemSide(const TriggerState &st, uint idx) {
+	if (itemIsFree(st, idx))
+		return "free";
+	const TriggerState::ItemSnapshot &it = st.items[idx];
+	return Common::String::format("%u:%d:%d %d/%d/%02x/%d",
+		(uint)it.level, (int)it.block, (int)it.pos,
+		(int)it.type, (int)it.value, (uint)it.flags, (int)it.icon);
+}
+
+// The item list of @p block in the order the engine walks it: from the
+// drawObjects head along `prev` until it returns to the head, the same
+// walk countQueuedItems does. Bounded so a corrupt ring cannot spin.
+void ScreenshotHarness::blockItemList(const TriggerState &st, int block,
+		Common::Array<uint16> &out) {
+	out.clear();
+	const uint16 head = st.drawObjects[block];
+	if (!head)
+		return;
+	uint16 cur = head;
+	for (int steps = 0; steps < 1024; ++steps) {
+		out.push_back(cur);
+		if (cur >= st.items.size())
+			break;
+		cur = (uint16)st.items[cur].prev;
+		if (cur == head || cur == 0)
+			break;
+	}
+}
+
+static bool sameList(const Common::Array<uint16> &a, const Common::Array<uint16> &b) {
+	if (a.size() != b.size())
+		return false;
+	for (uint i = 0; i < a.size(); ++i)
+		if (a[i] != b[i])
+			return false;
+	return true;
+}
+
+// Comma-separated indices, or `-` for an empty list.
+static Common::String listText(const Common::Array<uint16> &l) {
+	if (l.empty())
+		return "-";
+	Common::String s;
+	for (uint i = 0; i < l.size(); ++i) {
+		if (i)
+			s += ",";
+		s += Common::String::format("%u", (uint)l[i]);
+	}
+	return s;
 }
 
 // Reload the level from scratch so each trigger fires against identical
@@ -502,6 +592,15 @@ void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
 		vm->_openDoorState[i].wall = 0;
 	}
 
+	// The flying-object slots are the same kind of leftover: an item a
+	// script launched is flown by timerProcessFlyingObjects, a timer that
+	// never ticks under the harness, and a flight the drain in
+	// fireTriggers could not finish would otherwise stay enabled into the
+	// next firing's drain and land there instead. Nothing on the level
+	// load path clears them either.
+	for (int i = 0; i < vm->_numFlyingObjects; ++i)
+		memset(&vm->_flyingObjects[i], 0, sizeof(EoBFlyingObject));
+
 	// The item table is game-wide state that a level load does not
 	// touch: createItem appends to it, deleteItem and the item moves
 	// rewrite it, and a created item left in the hand stays there.
@@ -535,7 +634,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 	// as per trigger.
 	debugC(3, kDebugLevelScript, "HARNESS-LEVEL %d", level);
 
-	out.writeString("# eob2-triggers v1\n");
+	out.writeString("# eob2-triggers v2\n");
 	out.writeString(Common::String::format("level %d\n", level));
 	out.flush();
 
@@ -613,6 +712,30 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 			resetScriptBudget();
 			vm->runLevelScript(block, invoke);
 
+			// A script that launches an item (oeob_launchObject) parks it
+			// in _flyingObjects on its start block at pos | 4. The game
+			// flies it from timerProcessFlyingObjects, a timer that never
+			// ticks under the harness, so without this the after state
+			// would show an item hovering over its launch block. Drain
+			// the flights here so the reference records where the item
+			// lands and the crossing (0x10) and landing (4) scripts it
+			// fires on the way. Bounded, because a landing script can
+			// launch again and a magic object with distance 255 only
+			// stops at a wall.
+			bool flightBudgetExceeded = false;
+			for (int iter = 0;; ++iter) {
+				bool inFlight = false;
+				for (int i = 0; i < vm->_numFlyingObjects && !inFlight; ++i)
+					inFlight = vm->_flyingObjects[i].enable != 0;
+				if (!inFlight)
+					break;
+				if (iter == 64) {
+					flightBudgetExceeded = true;
+					break;
+				}
+				vm->timerProcessFlyingObjects(0);
+			}
+
 			captureTriggerState(vm, after);
 
 			// A trigger that switches level leaves the block table
@@ -653,8 +776,35 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 						before.doorBlock[i], before.doorState[i],
 						after.doorBlock[i], after.doorState[i]));
 			}
+			// The item table is game-wide, so its records are compared
+			// even across a level change; the per-block lists are not,
+			// for the same reason the walls are not. A record the firing
+			// appended has no before side and reads as free there.
+			const uint itemCount = MAX(before.items.size(), after.items.size());
+			for (uint i = 1; i < itemCount; ++i) {
+				if (!sameItem(before, after, i))
+					out.writeString(Common::String::format(
+						"  item %u %s -> %s\n", i,
+						itemSide(before, i).c_str(), itemSide(after, i).c_str()));
+			}
+			if (!levelChanged) {
+				Common::Array<uint16> lb, la;
+				for (int i = 0; i < 1024; ++i) {
+					blockItemList(before, i, lb);
+					blockItemList(after, i, la);
+					if (!sameList(lb, la))
+						out.writeString(Common::String::format(
+							"  items %d %s -> %s\n", i,
+							listText(lb).c_str(), listText(la).c_str()));
+				}
+			}
+			if (before.hand != after.hand)
+				out.writeString(Common::String::format(
+					"  hand %d -> %d\n", before.hand, after.hand));
 			if (scriptWasTruncated())
 				out.writeString("  truncated opcode-budget-exceeded\n");
+			if (flightBudgetExceeded)
+				out.writeString("  truncated flight-budget-exceeded\n");
 			if (g_dialoguesAnswered != answeredBefore)
 				out.writeString(Common::String::format(
 					"  dialogues %u\n", g_dialoguesAnswered - answeredBefore));
