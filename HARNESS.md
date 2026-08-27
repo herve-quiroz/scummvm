@@ -74,9 +74,10 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-dump-state` | no | absolute filesystem path | Write a canonical engine state snapshot (see below) and exit. Requires `--level`; `--cell` and `--facing` are optional, because a snapshot describes the whole level rather than a viewpoint. Does not require `--screenshot`; if both are given, both outputs are produced. |
 | `--eob-fire-triggers` | no | absolute filesystem path | Fire every trigger on `--level` from a clean state and record what each one changed. See "Trigger sweeps" below. |
 | `--eob-dialog-answers` | no | comma-separated integers | Dialogue button answers, consumed in order. Past the end, answers default to 1. |
+| `--eob-hand-item` | no (default 0) | decimal item-table index | With `--eob-fire-triggers` (or a batch `triggers` line): put that item-table record into the party's hand before each firing, as a player who had picked it up would carry it. 0 seeds nothing. Ignored by the other modes. See "Trigger sweeps" below. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_batch`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`.
 
 ### State snapshots
 
@@ -115,6 +116,7 @@ gates on `subFlags = ((blockFlags & 0xFFF8) >> 3) | 0xE0`.
 ```
 # eob2-triggers v2
 level 4
+hand-item <idx>                          (only when --eob-hand-item or the batch field is non-zero)
 trigger <block> <x> <y> flags=<hex4> script=<hex4> invoke=<hex2>
   wall <block> <dir> <old> -> <new>
   flag <idx> <old> -> <new>
@@ -194,6 +196,21 @@ firing that creates an item changes what every later firing in the sweep finds o
 blocks and in the party's hand. An empty hand is item 0, the table's dummy record, which
 is what the screenshot path leaves it at.
 
+`--eob-hand-item=N` seeds the hand instead of emptying it: after each reload, record N of
+the item table is put into the party's hand, the way a player who had picked it up before
+walking to the trigger would carry it. That is what the lock scripts need, because they
+test the hand item's type and value (a key of the right kind) and then consume it, and an
+unseeded sweep never sees those branches. The record is not duplicated: when it lies on
+the level being swept, `loadLevel` has just threaded it onto its block's item ring, and
+the seeding takes it off again with `getQueuedItem`, the routine a real pick-up uses, so
+the firing's `item N ... -> free` and `items <block>` lines read like a pick-up followed by
+a use. A record lying on another level is simply pointed at the hand. Both the `before`
+and `after` states of a firing are captured after the seeding, so the seeding itself never
+shows as a delta. A seeded sweep writes `hand-item N` immediately after the `level` line,
+before any `trigger` line; the line is absent from an unseeded sweep, and the format stays
+`# eob2-triggers v2` because it is optional and additive. `0` is the default and seeds
+nothing. The flag has no meaning outside a trigger sweep and is ignored by the other modes.
+
 Setting `EOB_TRIG_PROGRESS=/path` writes the current trigger to that file, rewritten and
 closed per firing. The main output is buffered, so if a script hangs or crashes this file
 is the only record of which trigger was responsible. It is a debugging aid, not part of
@@ -216,13 +233,18 @@ Each non-empty, non-`#` line of FILE is one capture:
 
 ```
 state    <outpath> <level>
-triggers <outpath> <level>
+triggers <outpath> <level> [hand-item]
 shot     <outpath> <level> <x> <y> <N|E|S|W>
 ```
 
 `state` parks the party at block (0,0) facing north before dumping, so the snapshot's
 `party` line stays deterministic. `shot` honours `--no-actors`, reapplying actor
 suppression after each level load (`loadLevel` repopulates the monster table).
+
+`triggers` takes an optional fourth field, the item-table index to carry in the hand for
+that level's sweep (see `--eob-hand-item` under "Trigger sweeps"). A line without it uses
+the `--eob-hand-item` value, or 0 when the flag was not given, so existing three-field
+lines keep their meaning.
 
 A batch `shot` produces a byte-identical PNG to the equivalent single `--screenshot`
 invocation; verified against griddelve's committed reference set.

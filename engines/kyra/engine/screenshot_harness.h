@@ -71,6 +71,12 @@ public:
 		// what each one changed.
 		Common::Path fireTriggersPath;
 
+		// Item-table index to put into the party's hand before each
+		// trigger firing, as a player who had picked it up would carry
+		// it. 0 (the table's dummy record) means an empty hand, the
+		// default. Only fireTriggers reads it.
+		int handItem;
+
 		// Batch script. Empty means "not requested". Each line is one
 		// capture, letting a whole level set be produced by a single
 		// process. That matters because ScummVM's shutdown path stalls
@@ -173,15 +179,22 @@ private:
 	/** Render the current scene and write it to @p path as a PNG. */
 	static bool writeFrame(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
 
-	/** Execute a batch script. @returns false and sets @p err on failure. */
-	static bool runBatch(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+	/**
+	 * Execute a batch script. @p handItem is the hand seed a `triggers`
+	 * line without a fourth field uses. @returns false and sets @p err
+	 * on failure.
+	 */
+	static bool runBatch(EoBCoreEngine *vm, const Common::Path &path, Common::String &err,
+		int handItem = 0);
 
 	/**
 	 * Fire every trigger on @p level from a clean state, recording what
-	 * each one changed. @returns false and sets @p err on failure.
+	 * each one changed. When @p handItem is non-zero, that item-table
+	 * record is in the party's hand for every firing and a `hand-item`
+	 * header line says so. @returns false and sets @p err on failure.
 	 */
 	static bool fireTriggers(EoBCoreEngine *vm, int level, const Common::Path &path,
-		Common::String &err);
+		Common::String &err, int handItem = 0);
 
 	/**
 	 * Everything a trigger can change, small enough to hold two copies
@@ -228,8 +241,12 @@ private:
 	static Common::String itemSide(const TriggerState &st, uint idx);
 	static void blockItemList(const TriggerState &st, int block, Common::Array<uint16> &out);
 
-	/** Reload @p level so each trigger fires against identical state. */
-	static void resetLevel(EoBCoreEngine *vm, int level);
+	/**
+	 * Reload @p level so each trigger fires against identical state.
+	 * When @p handItem is non-zero, that item-table record ends up in
+	 * the party's hand, taken off its block if it lies on the level.
+	 */
+	static void resetLevel(EoBCoreEngine *vm, int level, int handItem = 0);
 
 	/**
 	 * Install a fixed four-character party.

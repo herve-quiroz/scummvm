@@ -42,6 +42,7 @@
 #include "common/str.h"
 #include "common/textconsole.h"
 #include "common/tokenizer.h"
+#include "common/util.h"
 #include "graphics/surface.h"
 #include "image/png.h"
 #include "kyra/detection.h"
@@ -150,6 +151,23 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	}
 	if (haveTrig)
 		out.fireTriggersPath = Common::Path::fromCommandLine(ConfMan.get("eob_fire_triggers"));
+	// The hand seed only means something to a trigger sweep (the flag or
+	// a batch `triggers` line); the other modes ignore it. Validate it
+	// regardless, so a typo is reported rather than silently read as 0.
+	out.handItem = 0;
+	if (haveSetting("eob_hand_item")) {
+		const Common::String raw = ConfMan.get("eob_hand_item");
+		bool digits = true;
+		for (uint i = 0; i < raw.size() && digits; ++i)
+			digits = Common::isDigit(raw[i]);
+		if (!digits || raw.size() > 9) {
+			err = Common::String::format(
+				"--eob-hand-item=%s invalid (expected a non-negative decimal item-table index)",
+				raw.c_str());
+			return false;
+		}
+		out.handItem = atoi(raw.c_str());
+	}
 	parseDialogueAnswers();
 	if (haveShot)
 		out.screenshotPath = Common::Path::fromCommandLine(ConfMan.get("screenshot"));
@@ -562,7 +580,7 @@ void ScreenshotHarness::installHarnessParty(EoBCoreEngine *vm) {
 	vm->_updateCharNum = 0;
 }
 
-void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
+void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level, int handItem) {
 	// Deliberately not applying --no-actors here. That flag suppresses
 	// actor *rendering*; emptying the monster table makes some scripts
 	// spin forever, and the state snapshot carries no monster data, so a
@@ -618,10 +636,36 @@ void ScreenshotHarness::resetLevel(EoBCoreEngine *vm, int level) {
 	vm->loadLevel(level, 0);
 	vm->_currentBlock = 0;
 	vm->_currentDirection = 0;
+
+	// Seed the hand last, because loadLevel (addLevelItems) has just
+	// threaded every record that lies on this level onto its block's
+	// item ring, and the seed has to come off that ring. This mirrors a
+	// player who picked the item up before walking to the trigger: the
+	// lock scripts test the hand item's type and value, and the record
+	// they consume must be the one the level ships, not a copy, so that
+	// the firing's `item N ... -> free` and `items <block>` lines read
+	// like a real pick-up-then-use. getQueuedItem is what a pick-up calls;
+	// it unlinks the record and zeroes block, level, next and prev. The
+	// explicit clears after it cover a record lying on another level,
+	// which addLevelItems did not thread, and are no-ops otherwise. pos
+	// is left alone, as a pick-up leaves it. _itemInHand is assigned
+	// directly rather than through setHandItem so nothing draws a cursor
+	// under the harness.
+	if (handItem > 0 && (uint)handItem < vm->_items.size()
+			&& vm->_items[handItem].block != -1) {
+		EoBItem &it = vm->_items[handItem];
+		if (it.level == level && it.block > 0)
+			vm->getQueuedItem((Item *)&vm->_levelBlockProperties[it.block & 0x3FF].drawObjects,
+				0, handItem);
+		it.block = 0;
+		it.level = 0;
+		it.next = it.prev = 0;
+		vm->_itemInHand = handItem;
+	}
 }
 
 bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
-		const Common::Path &path, Common::String &err) {
+		const Common::Path &path, Common::String &err, int handItem) {
 	Common::DumpFile out;
 	if (!out.open(path)) {
 		err = Common::String::format("cannot open '%s' for writing",
@@ -636,9 +680,15 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 
 	out.writeString("# eob2-triggers v2\n");
 	out.writeString(Common::String::format("level %d\n", level));
+	// Optional and additive to the v2 format: a seeded sweep names the
+	// record every firing carried, so a reader can tell it from an
+	// unseeded one. Both states of a firing are captured after the
+	// seeding, so the seeding itself never shows as a delta.
+	if (handItem > 0)
+		out.writeString(Common::String::format("hand-item %d\n", handItem));
 	out.flush();
 
-	resetLevel(vm, level);
+	resetLevel(vm, level, handItem);
 
 	// Collect the trigger list before firing anything: a trigger can
 	// rewrite block properties, and the enumeration must describe the
@@ -662,7 +712,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 		for (int fi = 0; fi < ARRAYSIZE(kInvokeFlags); ++fi) {
 			const int invoke = kInvokeFlags[fi];
 
-			resetLevel(vm, level);
+			resetLevel(vm, level, handItem);
 
 			const uint16 blockFlags = vm->_levelBlockProperties[block].flags;
 			const uint16 script = vm->_levelBlockProperties[block].assignedObjects;
@@ -824,7 +874,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 }
 
 bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
-		Common::String &err) {
+		Common::String &err, int handItem) {
 	Common::FSNode node(path);
 	Common::SeekableReadStream *in = node.createReadStream();
 	if (!in) {
@@ -874,8 +924,9 @@ bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
 		} else if (cmd == "triggers") {
 			Common::String outPath = tok.nextToken();
 			Common::String levelStr = tok.nextToken();
+			Common::String handStr = tok.nextToken();
 			if (outPath.empty() || levelStr.empty()) {
-				err = Common::String::format("line %d: 'triggers' needs <outpath> <level>", lineNo);
+				err = Common::String::format("line %d: 'triggers' needs <outpath> <level> [hand-item]", lineNo);
 				ok = false;
 				break;
 			}
@@ -885,7 +936,23 @@ bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
 				ok = false;
 				break;
 			}
-			if (!fireTriggers(vm, level, Common::Path::fromCommandLine(outPath), err)) {
+			// Optional fourth field: the record to carry in the hand for
+			// this level's sweep. Absent, the --eob-hand-item value (or 0)
+			// applies, so existing three-field lines keep their meaning.
+			int lineHand = handItem;
+			if (!handStr.empty()) {
+				bool digits = true;
+				for (uint i = 0; i < handStr.size() && digits; ++i)
+					digits = Common::isDigit(handStr[i]);
+				if (!digits || handStr.size() > 9) {
+					err = Common::String::format("line %d: hand-item '%s' invalid (expected a non-negative decimal item-table index)",
+						lineNo, handStr.c_str());
+					ok = false;
+					break;
+				}
+				lineHand = atoi(handStr.c_str());
+			}
+			if (!fireTriggers(vm, level, Common::Path::fromCommandLine(outPath), err, lineHand)) {
 				err = Common::String::format("line %d: %s", lineNo, err.c_str());
 				ok = false;
 				break;
@@ -960,7 +1027,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	bootstrap(vm, s);
 
 	if (!s.batchPath.empty()) {
-		if (!runBatch(vm, s.batchPath, err)) {
+		if (!runBatch(vm, s.batchPath, err, s.handItem)) {
 			warning("Screenshot harness: %s", err.c_str());
 			_exit(1);
 		}
@@ -969,7 +1036,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 
 	if (!s.fireTriggersPath.empty()) {
 		if (!fireTriggers(vm, s.haveLevel ? s.level : vm->_currentLevel,
-				s.fireTriggersPath, err)) {
+				s.fireTriggersPath, err, s.handItem)) {
 			warning("Screenshot harness: %s", err.c_str());
 			_exit(1);
 		}

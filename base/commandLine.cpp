@@ -185,6 +185,10 @@ static const char HELP_STRING4[] =
 	"                           record what each one changed, to PATH.\n"
 	"  --eob-dialog-answers=LIST [EOB2] Comma-separated dialogue button answers, consumed in\n"
 	"                           order. Past the end, answers default to 1.\n"
+	"  --eob-hand-item=N        [EOB2] With --eob-fire-triggers: put item-table record N into\n"
+	"                           the party's hand before each firing, as a player who had\n"
+	"                           picked it up would carry it. 0 (default) seeds nothing.\n"
+	"                           A batch 'triggers' line takes it as an optional 4th field.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1163,6 +1167,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-dialog-answers")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-hand-item")
 			END_OPTION
 
 unknownOption:
