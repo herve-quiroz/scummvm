@@ -126,6 +126,114 @@ bool ScreenshotHarness::nextDialogueAnswer(int &out) {
 	return true;
 }
 
+// Sequence captures (--eob-sequence-prefix). Under the harness every wait
+// returns at once, so a script's sequence runs through inside one
+// runLevelScript call and restoreAfterDialogueSequence redraws the play
+// field before anything else could look. The capture points photograph
+// the screen at the moments a player would see it: after a frame is cut
+// in, after a page's text is drawn, and at each delay inside a sequence.
+// Armed only around a trigger firing, so a capture names the block that
+// fired and nothing is written while levels load between firings.
+static Common::String g_seqPrefix;
+static Common::DumpFile *g_seqTrace = nullptr;
+static uint g_seqCount = 0;
+static bool g_seqArmed = false;
+static uint16 g_seqBlock = 0;
+static EoBCoreEngine *g_seqVm = nullptr;
+
+bool ScreenshotHarness::openSequenceCapture(const Common::String &prefix, Common::String &err) {
+	const Common::Path tracePath = Common::Path::fromCommandLine(prefix + ".trace.txt");
+	Common::DumpFile *trace = new Common::DumpFile();
+	if (!trace->open(tracePath)) {
+		delete trace;
+		err = Common::String::format("cannot open '%s' for writing",
+			tracePath.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+	g_seqPrefix = prefix;
+	g_seqTrace = trace;
+	g_seqCount = 0;
+	return true;
+}
+
+void ScreenshotHarness::closeSequenceCapture() {
+	if (!g_seqTrace)
+		return;
+	g_seqTrace->finalize();
+	g_seqTrace->close();
+	delete g_seqTrace;
+	g_seqTrace = nullptr;
+}
+
+void ScreenshotHarness::beginSequenceCapture(EoBCoreEngine *vm, uint16 block) {
+	if (!g_seqTrace)
+		return;
+	g_seqVm = vm;
+	g_seqBlock = block;
+	g_seqArmed = true;
+}
+
+void ScreenshotHarness::endSequenceCapture() {
+	g_seqArmed = false;
+}
+
+void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
+	const uint n = g_seqCount++;
+	const Common::Path png = Common::Path::fromCommandLine(
+		Common::String::format("%s.%03u.png", g_seqPrefix.c_str(), n));
+	Common::String err;
+	if (!writePagePng(g_seqVm, png, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+	const Common::String line = Common::String::format("%03u %s", n, event.c_str());
+	g_seqTrace->writeString(line + "\n");
+	// Flushed per line for the same reason the sweep flushes per trigger:
+	// the process leaves through _exit, and a script that hangs mid-sequence
+	// should still leave a record of what it drew.
+	g_seqTrace->flush();
+	// Mirrored into the opcode log, where the HARNESS-TRIGGER markers name
+	// the invocation kind the trace line does not.
+	debugC(3, kDebugLevelScript, "HARNESS-SEQUENCE %s", line.c_str());
+}
+
+void ScreenshotHarness::captureSequenceFrame(const char *file, int destRect, int x1, int y1, int flags) {
+	if (!g_seqArmed)
+		return;
+	emitSequenceCapture(Common::String::format("frame block=%u file=%s rect=%d x=%d y=%d flags=%d",
+		(uint)g_seqBlock, file, destRect, x1, y1, flags));
+}
+
+void ScreenshotHarness::captureSequencePage(int textId, const char *label) {
+	if (!g_seqArmed)
+		return;
+	// A label is quoted, so an empty one ("", a page with no button) reads
+	// apart from a missing one: getString returns null for index 0xFFFF,
+	// written as a bare `-`.
+	Common::String q("-");
+	if (label) {
+		q = "\"";
+		for (const char *c = label; *c; ++c) {
+			if (*c == '"' || *c == '\\')
+				q += '\\';
+			q += *c;
+		}
+		q += "\"";
+	}
+	emitSequenceCapture(Common::String::format("page block=%u text=%d label=%s",
+		(uint)g_seqBlock, textId, q.c_str()));
+}
+
+void ScreenshotHarness::captureSequenceDelay(uint32 millis) {
+	// Only delays inside a sequence: the ones outside pace wall changes and
+	// lead-ins, and draw nothing a sequence capture is for.
+	if (!g_seqArmed || !g_seqVm->_dialogueField)
+		return;
+	const uint32 tick = g_seqVm->tickLength();
+	emitSequenceCapture(Common::String::format("delay block=%u ticks=%u",
+		(uint)g_seqBlock, (uint)(tick ? millis / tick : millis)));
+}
+
 static bool parseFacing(const Common::String &raw, uint8 &out) {
 	if (raw.size() != 1)
 		return false;
@@ -167,6 +275,16 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 			return false;
 		}
 		out.handItem = atoi(raw.c_str());
+	}
+	// Sequence captures are only taken while a trigger fires, so the prefix
+	// is refused without a mode that fires any: accepting it would write an
+	// empty trace and read as "nothing was drawn".
+	if (haveSetting("eob_sequence_prefix")) {
+		if (!haveTrig && !haveBatch) {
+			err = "--eob-sequence-prefix=PATH requires --eob-fire-triggers=PATH or --eob-batch=FILE";
+			return false;
+		}
+		out.sequencePrefix = ConfMan.get("eob_sequence_prefix");
 	}
 	parseDialogueAnswers();
 	if (haveShot)
@@ -395,6 +513,11 @@ bool ScreenshotHarness::writeFrame(EoBCoreEngine *vm, const Common::Path &path,
 	// at the end of a normal frame.
 	vm->_screen->updateScreen();
 
+	return writePagePng(vm, path, err);
+}
+
+bool ScreenshotHarness::writePagePng(EoBCoreEngine *vm, const Common::Path &path,
+		Common::String &err) {
 	Common::DumpFile out;
 	if (!out.open(path)) {
 		err = Common::String::format("cannot open '%s' for writing",
@@ -760,6 +883,9 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 			debugC(3, kDebugLevelScript, "HARNESS-TRIGGER block=%u invoke=%02x", block, invoke);
 
 			resetScriptBudget();
+			// Armed from here until the flights are drained, because the
+			// crossing and landing scripts are part of the same firing.
+			beginSequenceCapture(vm, block);
 			vm->runLevelScript(block, invoke);
 
 			// A script that launches an item (oeob_launchObject) parks it
@@ -785,6 +911,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 				}
 				vm->timerProcessFlyingObjects(0);
 			}
+			endSequenceCapture();
 
 			captureTriggerState(vm, after);
 
@@ -1024,6 +1151,11 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		_exit(1);
 	}
 
+	if (!s.sequencePrefix.empty() && !openSequenceCapture(s.sequencePrefix, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+
 	bootstrap(vm, s);
 
 	if (!s.batchPath.empty()) {
@@ -1031,6 +1163,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 			warning("Screenshot harness: %s", err.c_str());
 			_exit(1);
 		}
+		closeSequenceCapture();
 		_exit(0);
 	}
 
@@ -1043,6 +1176,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		debug("Screenshot harness: wrote %s",
 			s.fireTriggersPath.toString(Common::Path::kNativeSeparator).c_str());
 	}
+	closeSequenceCapture();
 
 	if (!s.dumpStatePath.empty()) {
 		if (!writeStateSnapshot(vm, s.dumpStatePath, err)) {

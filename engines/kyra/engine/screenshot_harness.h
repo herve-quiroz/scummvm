@@ -84,6 +84,12 @@ public:
 		// per-capture invocation is prohibitively slow in bulk.
 		Common::Path batchPath;
 
+		// Sequence capture prefix. Empty means "not requested". While a
+		// trigger firing runs (--eob-fire-triggers or a batch `triggers`
+		// line), each capture point writes <prefix>.NNN.png and one line
+		// of <prefix>.trace.txt.
+		Common::String sequencePrefix;
+
 		uint8 level;
 		uint8 cellX;
 		uint8 cellY;
@@ -142,6 +148,21 @@ public:
 	static bool scriptWasTruncated();
 
 	/**
+	 * Sequence capture points (--eob-sequence-prefix). Each writes
+	 * <prefix>.NNN.png of the screen and one trace line, and is a no-op
+	 * unless the flag was given and a trigger firing is running, so normal
+	 * play and the other harness modes are untouched.
+	 *
+	 * captureSequenceFrame runs after drawSequenceBitmap's screen update,
+	 * captureSequencePage after printDialogueText has drawn a page's text
+	 * (before any wait), and captureSequenceDelay at EoBCoreEngine::delay,
+	 * recording only delays inside a sequence (_dialogueField set).
+	 */
+	static void captureSequenceFrame(const char *file, int destRect, int x1, int y1, int flags);
+	static void captureSequencePage(int textId, const char *label);
+	static void captureSequenceDelay(uint32 millis);
+
+	/**
 	 * Write a canonical engine state snapshot for the currently loaded
 	 * level to @p path.
 	 *
@@ -178,6 +199,31 @@ private:
 
 	/** Render the current scene and write it to @p path as a PNG. */
 	static bool writeFrame(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+
+	/**
+	 * Write page 0 as it stands, in the engine's palette, to @p path as a
+	 * PNG. Draws nothing, so a capture point can call it mid-script.
+	 */
+	static bool writePagePng(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+
+	/**
+	 * Open (truncating) <@p prefix>.trace.txt and reset the capture
+	 * counter. @returns false and sets @p err if it cannot be written.
+	 */
+	static bool openSequenceCapture(const Common::String &prefix, Common::String &err);
+
+	/** Finalize and close the trace, if one is open. */
+	static void closeSequenceCapture();
+
+	/**
+	 * Arm the capture points for one firing of @p block, and disarm them
+	 * after it. Arming is a no-op when no trace is open.
+	 */
+	static void beginSequenceCapture(EoBCoreEngine *vm, uint16 block);
+	static void endSequenceCapture();
+
+	/** Write the next PNG and its trace line, `NNN <event>`. */
+	static void emitSequenceCapture(const Common::String &event);
 
 	/**
 	 * Execute a batch script. @p handItem is the hand seed a `triggers`

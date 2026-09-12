@@ -557,6 +557,13 @@ void TextDisplayer_rpg::printDialogueText(int stringId, const char *pageBreakStr
 		_screen->setFontStyles(_screen->_currentFont, cs);
 	_screen->set16bitShadingLevel(0);
 
+#ifdef ENABLE_EOB
+	// Photograph the page for --eob-sequence-prefix once its text is drawn,
+	// before the wait (which returns at once under the harness); a no-op
+	// otherwise.
+	ScreenshotHarness::captureSequencePage(stringId, pageBreakString);
+#endif
+
 	if (pageBreakString) {
 		if (pageBreakString[0]) {
 			_pageBreakString = pageBreakString;

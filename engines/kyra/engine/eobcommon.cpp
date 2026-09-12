@@ -1809,6 +1809,9 @@ void EoBCoreEngine::drawSequenceBitmap(const char *file, int destRect, int x1, i
 		_screen->copyRegion(0, 0, 0, 0, 184, (_flags.platform == Common::kPlatformAmiga) ? 110 : 121, 6, 0, Screen::CR_NO_P_CHECK);
 
 	_screen->updateScreen();
+
+	// Photograph the cut for --eob-sequence-prefix; a no-op otherwise.
+	ScreenshotHarness::captureSequenceFrame(file, destRect, x1, y1, flags);
 }
 
 int EoBCoreEngine::runDialogue(int dialogueTextId, int numStr, int loopButtonId, ...) {
@@ -1968,8 +1971,12 @@ void EoBCoreEngine::delay(uint32 millis, bool, bool) {
 	// that fires every trigger in the game, so skip the wait outright.
 	// This is the single choke point: KyraRpgEngine::delayUntil routes
 	// through here too.
-	if (ScreenshotHarness::isEnabled())
+	if (ScreenshotHarness::isEnabled()) {
+		// The wait is skipped, but --eob-sequence-prefix still photographs
+		// the screen a delay inside a sequence would have held.
+		ScreenshotHarness::captureSequenceDelay(millis);
 		return;
+	}
 
 	while (millis && !shouldQuit() && !(_allowSkip && skipFlag())) {
 		updateInput();

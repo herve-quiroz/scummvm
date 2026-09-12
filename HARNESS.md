@@ -76,8 +76,9 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-dialog-answers` | no | comma-separated integers | Dialogue button answers, consumed in order. Past the end, answers default to 1. |
 | `--eob-hand-item` | no (default 0) | decimal item-table index | With `--eob-fire-triggers` (or a batch `triggers` line): put that item-table record into the party's hand before each firing, as a player who had picked it up would carry it. 0 seeds nothing. Ignored by the other modes. See "Trigger sweeps" below. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
+| `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers` or a batch `triggers` line: while a trigger firing runs, write `<prefix>.NNN.png` at each sequence capture point plus a sidecar `<prefix>.trace.txt`. Refused without a firing mode. See "Sequence captures" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`.
 
 ### State snapshots
 
@@ -219,6 +220,44 @@ the reference format.
 All 15 levels sweep in about 12 seconds in one batched process, producing roughly 1560
 firings across 1005 trigger blocks.
 
+### Sequence captures
+
+Under the harness every wait returns at once, so a script's picture sequence (between
+`initDialogueSequence` and `restoreAfterDialogueSequence`) runs through inside a single
+`runLevelScript` call, and the restore redraws the play field before anything could look.
+`--eob-sequence-prefix=PATH` photographs the screen at the points a player would see it,
+while a trigger firing runs (`--eob-fire-triggers`, or a batch `triggers` line):
+
+| Capture point | Where | Trace line |
+|---------------|-------|------------|
+| A frame is cut in | `EoBCoreEngine::drawSequenceBitmap`, after its `updateScreen` | `NNN frame block=<b> file=<f> rect=<r> x=<x> y=<y> flags=<n>` |
+| A page's text is drawn | `TextDisplayer_rpg::printDialogueText(int, const char *, ...)`, after `displayText` and before the wait | `NNN page block=<b> text=<id> label=<q>` |
+| A delay inside a sequence | `EoBCoreEngine::delay`, when `_dialogueField` is set | `NNN delay block=<b> ticks=<n>` |
+
+Each capture writes `<PATH>.NNN.png`, numbered from 000 across the whole process, and one
+line of `<PATH>.trace.txt` naming it; the trace is truncated when the process starts and
+flushed per line.
+
+* `block` is the firing's trigger block, also for the crossing and landing scripts the
+  flight drain runs, because the captures stay armed until the drain ends. The trace
+  line does not name the invocation kind: with `--debuglevel=3 --debugflags=Script` each
+  capture is mirrored as a `HARNESS-SEQUENCE <line>` log line, after the firing's
+  `HARNESS-TRIGGER block=<b> invoke=<k>` marker.
+* A frame's operands are `drawSequenceBitmap`'s own: the file name as the script spells
+  it, the destination rectangle index, the source x in eight-pixel columns, the source y,
+  and the flags.
+* A page's `label` is the page-break string, quoted with `"` and `\` escaped, so an empty
+  label (`""`, a page with no button) reads apart from a missing one, written `-` (label
+  index `0xFFFF`, which `getString` returns as null).
+* `ticks` is the delay in engine ticks (`millis / tickLength()`). Delays outside a
+  sequence, which pace wall changes and lead-ins, are not captured.
+* The page capture sits in the shared RPG text displayer, so it fires for any numbered
+  dialogue page drawn during a firing, inside a sequence or not.
+* A cross-fade (flag 2) still runs `Screen::crossFadeRegion`, which paces itself with
+  `delayMillis` per row rather than through `EoBCoreEngine::delay`; the frame capture
+  follows it, so it shows the whole cut.
+* Levels load between firings with the captures disarmed, so nothing is written then.
+
 ### Batch mode
 
 Startup work is repeated per process, so bulk capture is much cheaper in one.
@@ -347,6 +386,7 @@ sweep is reproducible on any installation.
 * Script flag table access: `friend class ScreenshotHarness` on `EoBInfProcessor` in `engines/kyra/script/script_eob.h`.
 * Engine hook: `engines/kyra/engine/eobcommon.cpp`, in `EoBCoreEngine::go()` (just after `loadItemDefs()`).
 * Friend declarations for engine state access: `engines/kyra/engine/eobcommon.h`, `engines/kyra/engine/kyra_rpg.h`.
+* Sequence capture points (`--eob-sequence-prefix`): `engines/kyra/engine/eobcommon.cpp` (`EoBCoreEngine::drawSequenceBitmap` and `EoBCoreEngine::delay`) and `engines/kyra/text/text_rpg.cpp` (`TextDisplayer_rpg::printDialogueText`, the numbered-page overload); CLI option in `base/commandLine.cpp`.
 
 ## Modifying the harness
 

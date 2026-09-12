@@ -189,6 +189,9 @@ static const char HELP_STRING4[] =
 	"                           the party's hand before each firing, as a player who had\n"
 	"                           picked it up would carry it. 0 (default) seeds nothing.\n"
 	"                           A batch 'triggers' line takes it as an optional 4th field.\n"
+	"  --eob-sequence-prefix=PATH [EOB2] With --eob-fire-triggers or a batch 'triggers' line:\n"
+	"                           while a firing runs, write <PATH>.NNN.png after each sequence\n"
+	"                           frame, page and in-sequence delay, plus <PATH>.trace.txt.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1170,6 +1173,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-hand-item")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-sequence-prefix")
 			END_OPTION
 
 unknownOption:
