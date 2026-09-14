@@ -34,7 +34,7 @@ KYRA/EOB2 (Eye of the Beholder II target):
 
 `--extrapath` points at `dists/engine-data/` which ships `mm.dat` (the MM/Xeen engine-data file). Drop it if `mm.dat` is installed system-wide. The audio flags silence the engine; ScummVM does not expose `--music-mute` style flags as CLI options.
 
-The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot`, `--mm-scale-test`, or `--mm-screenshot-prefix` is on the command line, so no game window pops up regardless of whether a real X / Wayland display is present. To pick a different driver (e.g. `offscreen`), set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var when none is provided.
+The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot`, `--mm-scale-test`, `--mm-screenshot-prefix`, `--eob-dump-state`, `--eob-batch` or `--eob-fire-triggers` is on the command line, so no game window pops up regardless of whether a real X / Wayland display is present. `--eob-play-sequence` is not on that list, which keeps the shared `posix-main.cpp` untouched; its callers set `SDL_VIDEODRIVER=dummy` themselves. To pick a different driver (e.g. `offscreen`), set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var when none is provided.
 
 ## Shared flags
 
@@ -76,9 +76,10 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-dialog-answers` | no | comma-separated integers | Dialogue button answers, consumed in order. Past the end, answers default to 1. |
 | `--eob-hand-item` | no (default 0) | decimal item-table index | With `--eob-fire-triggers` (or a batch `triggers` line): put that item-table record into the party's hand before each firing, as a player who had picked it up would carry it. 0 seeds nothing. Ignored by the other modes. See "Trigger sweeps" below. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
-| `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers` or a batch `triggers` line: while a trigger firing runs, write `<prefix>.NNN.png` at each sequence capture point plus a sidecar `<prefix>.trace.txt`. Refused without a firing mode. See "Sequence captures" below. |
+| `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers`, a batch `triggers` line or `--eob-play-sequence`: write `<prefix>.NNNN.png` at each capture point plus a sidecar `<prefix>.trace.txt`. Refused without one of those modes. See "Sequence captures" and "Sequence plays" below. |
+| `--eob-play-sequence` | no | `intro` or `finale` | Play the reference's intro (`DarkMoonEngine::seq_playIntro`) or finale (`seq_playFinale`, credits included) from a fresh bootstrap on a virtual clock, photographing it through `--eob-sequence-prefix` (required), then exit. Presence enables harness mode. Needs no `--level`, `--cell` or `--facing`. Refused with `--screenshot`, `--eob-dump-state`, `--eob-fire-triggers` or `--eob-batch`. Not forced headless: set `SDL_VIDEODRIVER=dummy`. See "Sequence plays" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`.
 
 ### State snapshots
 
@@ -226,15 +227,16 @@ Under the harness every wait returns at once, so a script's picture sequence (be
 `initDialogueSequence` and `restoreAfterDialogueSequence`) runs through inside a single
 `runLevelScript` call, and the restore redraws the play field before anything could look.
 `--eob-sequence-prefix=PATH` photographs the screen at the points a player would see it,
-while a trigger firing runs (`--eob-fire-triggers`, or a batch `triggers` line):
+while a trigger firing runs (`--eob-fire-triggers`, or a batch `triggers` line). The same
+prefix serves the intro and the finale; see "Sequence plays" below.
 
 | Capture point | Where | Trace line |
 |---------------|-------|------------|
-| A frame is cut in | `EoBCoreEngine::drawSequenceBitmap`, after its `updateScreen` | `NNN frame block=<b> file=<f> rect=<r> x=<x> y=<y> flags=<n>` |
-| A page's text is drawn | `TextDisplayer_rpg::printDialogueText(int, const char *, ...)`, after `displayText` and before the wait | `NNN page block=<b> text=<id> label=<q>` |
-| A delay inside a sequence | `EoBCoreEngine::delay`, when `_dialogueField` is set | `NNN delay block=<b> ticks=<n>` |
+| A frame is cut in | `EoBCoreEngine::drawSequenceBitmap`, after its `updateScreen` | `NNNN frame block=<b> file=<f> rect=<r> x=<x> y=<y> flags=<n>` |
+| A page's text is drawn | `TextDisplayer_rpg::printDialogueText(int, const char *, ...)`, after `displayText` and before the wait | `NNNN page block=<b> text=<id> label=<q>` |
+| A delay inside a sequence | `EoBCoreEngine::delay`, when `_dialogueField` is set | `NNNN delay block=<b> ticks=<n>` |
 
-Each capture writes `<PATH>.NNN.png`, numbered from 000 across the whole process, and one
+Each capture writes `<PATH>.NNNN.png`, numbered from 0000 across the whole process, and one
 line of `<PATH>.trace.txt` naming it; the trace is truncated when the process starts and
 flushed per line.
 
@@ -257,6 +259,150 @@ flushed per line.
   `delayMillis` per row rather than through `EoBCoreEngine::delay`; the frame capture
   follows it, so it shows the whole cut.
 * Levels load between firings with the captures disarmed, so nothing is written then.
+
+### Sequence plays
+
+EOB2's intro and finale are not script sequences. `DarkmoonSequenceHelper` plays them from
+animation tables, and the other modes never reach them: the harness takes over in
+`EoBCoreEngine::go` before the main menu, which plays the intro, and before `runLoop`, whose
+tail plays the finale. `--eob-play-sequence=intro|finale` plays one of them directly and
+photographs it:
+
+* The harness bootstraps as a screenshot does (`startupNew` and level 1, or `--save-slot`),
+  seeds the RNG with `0x5EED` as the trigger sweeps do (the finale's dissolves shuffle their
+  pixel order with it), and selects the audio resource set the reference selects first:
+  `kMusicIntro` and `loadSoundFile(0)`, as `DarkMoonEngine::mainMenu` does, or
+  `kMusicFinale`, as `go` does. The party-transfer autosave `go` writes before the finale is
+  not written.
+* It plays `DarkMoonEngine::seq_playIntro` or `seq_playFinale` (credits included), closes
+  the trace and exits 0.
+* `--eob-sequence-prefix` is required, and no other mode may be combined with the flag.
+* Callers set `SDL_VIDEODRIVER=dummy`: the flag is not in `posix-main.cpp`'s headless force.
+
+```bash
+SDL_VIDEODRIVER=dummy ./scummvm --path="/path/to/EOB2/" \
+    --extrapath="$PWD/dists/engine-data" \
+    --music-driver=null -m 0 -s 0 -r 0 \
+    --eob-play-sequence=finale --eob-sequence-prefix=/tmp/finale eob2
+```
+
+#### The virtual clock
+
+The helper paces itself on `_system->getMillis()` as well as through `EoBCoreEngine::delay`:
+its holds busy-wait, the intro's scroll derives its state from elapsed time, the delayed
+palette fade steps when a timer passes, and the credits wait between steps. Under the
+harness every `delay` returns at once, so those would run at real speed, with states that
+depend on scheduler jitter. While a play runs, the harness owns a millisecond clock instead:
+
+* `EoBCoreEngine::delay` advances it by the amount it skips.
+* `ScreenshotHarness::sequenceMillis()` returns it during a play, and the wall clock
+  otherwise. The helper reads it in `delay`, `hScroll`, `initDelayedPaletteFade`,
+  `processDelayedPaletteFade` and `animCommand` (commands 3 and 4), `seq_playIntro` for its
+  scroll deadlines, `seq_playCredits` for its step pacing, and `KyraRpgEngine::delayUntil`
+  for the current time.
+* The finale's hold (the `palFading` branch of `DarkmoonSequenceHelper::delay`) only polls,
+  so during a play it steps the clock with `_vm->delay(1)`, one millisecond a turn.
+* The clock starts at 65536, because `hScroll` reads a zero start timestamp as "no scroll".
+* The finale's last loop waits for a skip that nothing sends headlessly. During a play it
+  photographs the screen once and returns, and the finale goes on to its fade to black.
+
+Holds, the scroll, delayed fades and the credits then run in no time, with a repeatable step
+count. Time the reference spends in `_system->delayMillis` (the text-colour fade's steps,
+`crossFadeRegion`'s rows, the 10 ms after a palette set outside the scroll, the helper
+destructor's 150 ms) is not on the virtual clock: it costs real time and draws nothing, but
+a delayed palette fade in progress sees less time pass across a text fade than in real play.
+
+#### Capture points
+
+Each capture writes `<PATH>.NNNN.png` of page 0 in the **screen palette**
+(`Screen::_screenPalette`, expanded with `(v * 0xFF) / 0x3F` as `Screen::setScreenPalette`
+expands it), numbered from 0000, and one line of `<PATH>.trace.txt` ending in
+`palette=<crc>`: the CRC-32 (zlib's) of the 768 six-bit screen palette bytes, as eight
+lowercase hex digits. The flashes, fades and black screens of both sequences change the
+screen palette and leave slot 0 alone, which is what `writePagePng` reads; the other modes
+keep `writePagePng`, so their output is unchanged.
+
+| Capture point | Where | Trace line |
+|---------------|-------|------------|
+| A record is drawn | `DarkmoonSequenceHelper::animCommand`, inside each case after the draw and the palette set, before the hold (command 6 after its sound) | `NNNN anim seq=<s> table=<i> rec=<r> cmd=<c> obj=<o> x1=<x> y1=<y> ticks=<d> pal=<p> x2=<x> y2=<y> w=<w> h=<h> palette=<crc>` |
+| A trailing hold | `animCommand`, when `del > 0`, before the hold | `NNNN hold seq=<s> table=<i> ticks=<n> palette=<crc>` |
+| A bare hold | `DarkmoonSequenceHelper::delay`, before the hold | `NNNN hold seq=<s> ticks=<n> palette=<crc>` |
+| A scene reaches the screen | `loadScene` onto page 0 or 1, after `updateScreen` | `NNNN scene seq=<s> index=<i> palette=<crc>` |
+| A page is copied to the screen | `update`, after `updateScreen` | `NNNN update seq=<s> page=<p> palette=<crc>` |
+| Text | `printText` after its `updateScreen`; `fadeText` on return | `NNNN text seq=<s> index=<i> color=<c> palette=<crc>` / `NNNN untext seq=<s> palette=<crc>` |
+| A palette set or fade ends | `setPalette`, `fadePalette`, `setPaletteWithoutTextColor`, on return | `NNNN palette seq=<s> index=<i> ticks=<n> palette=<crc>` |
+| A dissolve ends | after each `crossFadeRegion` in `seq_playFinale` | `NNNN dissolve seq=finale palette=<crc>` |
+| The scroll moves | `hScroll`, on each state change, wherever it is driven from | `NNNN scroll seq=intro state=<n> palette=<crc>` |
+| The credits move | `seq_playCredits`, after each `updateScreen` | `NNNN credits seq=finale step=<n> palette=<crc>` |
+| The last screen | `seq_playFinale`, before the skip wait | `NNNN final seq=finale palette=<crc>` |
+
+* The helper's methods call one another, and only the outermost call photographs
+  (`ScreenshotHarness::SequenceScope` counts the nesting). `printText`'s palette set,
+  `animCommand`'s holds and palette sets, `update`'s palette set and the steps of
+  `processDelayedPaletteFade` belong to the capture of the call that made them. The scroll,
+  credits, dissolve and final captures fire wherever they are reached, so the scroll states
+  drawn during the holds of the record the intro plays mid-scroll are photographed too.
+* `seq` is `intro` or `finale`. `table` is the animation table index after
+  `_platformAnimOffset` (0 on DOS) and `rec` the record's index in it. The other `anim`
+  fields are the stored `DarkMoonAnimCommand` record's own, `x1` before `animCommand` halves
+  a value at or above 320, so a transcription can print the same line from its table.
+* `ticks` is in engine ticks; on a `palette` line it is `fadePalette`'s delay argument, and 0
+  for a set. `color` is the colour the sequence passed to `printText`, before VGA moves the
+  text to slot 255.
+* A `setPaletteWithoutTextColor` whose palette is already on screen changes nothing and still
+  writes its line, so the trace follows the calls.
+* `step` counts credits steps from 0.
+* As for the firing captures, the trace is truncated when the process starts, flushed per
+  line, and each line is mirrored as `HARNESS-SEQUENCE <line>` with
+  `--debuglevel=3 --debugflags=Script`.
+
+One line of each kind, from the DOS English data:
+
+```
+0000 hold seq=intro ticks=1 palette=e30d871f
+0001 palette seq=intro index=9 ticks=0 palette=f5a0f415
+0004 anim seq=intro table=3 rec=0 cmd=0 obj=0 x1=0 y1=0 ticks=1 pal=2 x2=0 y2=0 w=0 h=0 palette=cf9d2cb6
+0023 hold seq=intro table=6 ticks=18 palette=e30d871f
+0153 text seq=intro index=0 color=16 palette=e53682b0
+0159 untext seq=intro palette=620741d7
+0198 scroll seq=intro state=0 palette=e53682b0
+0484 update seq=intro page=2 palette=620741d7
+1001 dissolve seq=finale palette=31d9776c
+1076 credits seq=finale step=0 palette=4dc60184
+1107 final seq=finale palette=dc6ac022
+```
+
+A sequence play does not photograph:
+
+* the steps of `Screen::fadePalette`, of the text-colour fade, or of a delayed palette fade
+  between captures (each capture's `palette` records the state reached);
+* a dissolve in progress;
+* sound and music: command 6 is traced and photographed with nothing new drawn;
+* the main menu and the title screen;
+* party portraits: the bootstrap installs no party, so the finale's portrait screen shows
+  empty frames (`--save-slot=N` loads a save's party first; not exercised);
+* other platforms and render modes: the design assumes DOS VGA.
+
+#### What the DOS data does
+
+Measured on the DOS English data with `--music-driver=null`:
+
+* The intro writes 1374 captures in about 13 seconds and the finale 1109 in about 16. Most
+  of that is `_system->delayMillis` pacing. Two plays of each produce identical traces and
+  byte-identical PNGs.
+* `--music-driver=null` detects as `MT_NULL`, which `EoBCoreEngine::init` maps to
+  `Sound::kPCjr` with music disabled, so `waitForSongNotifier` returns at once. With an AdLib
+  driver it would loop on `checkTrigger()`.
+* No `scene` line is written: both sequences load every scene onto page 2 or 6.
+* The credits draw one shape and stop after 26 steps. `seq_playCredits` reads `CREDITS.TXT`
+  first, and the copy in this data directory has lost its 0x0D line separators (it is the
+  static credits table with every 0x0D removed, ending in its NUL). With no 0x0D the whole
+  file is one item, and its first byte, 0x02, makes that item a shape (escape id 5). The loop
+  ends once the shape's bottom edge has entered the credits window. Nothing crashes, and the
+  captures before and after are intact. The harness does not repair the data; it records
+  what the reference plays. After that one item the loop tests the byte one past the end of
+  the file's buffer (`Resource::fileData` adds no terminator), which evidently read as zero
+  in these runs, since no second item was parsed.
 
 ### Batch mode
 
@@ -300,7 +446,7 @@ The KYRA harness refuses to run on anything other than EOB2 (`gameID == GI_EOB2`
 
 ## Headless behavior
 
-The harness is fully headless. No window pops up under any video driver because `posix-main.cpp` forces `SDL_VIDEODRIVER=dummy` (when none is set) before SDL initialises. Palette and surface data are read from each engine's own state instead of from the SDL backend, so the captured PNG is correct even under `dummy` and `offscreen` drivers (which return an empty palette via `getPaletteManager()->grabPalette()`).
+The harness is fully headless. No window pops up under any video driver because `posix-main.cpp` forces `SDL_VIDEODRIVER=dummy` (when none is set) before SDL initialises, for the flags listed under "Invocation"; a sequence play (`--eob-play-sequence`) relies on its caller setting it. Palette and surface data are read from each engine's own state instead of from the SDL backend, so the captured PNG is correct even under `dummy` and `offscreen` drivers (which return an empty palette via `getPaletteManager()->grabPalette()`).
 
 No autosave is written. No prompts are emitted. Failure paths exit fast (no waiting for a user to dismiss the modal error dialog ScummVM normally shows).
 
@@ -349,7 +495,8 @@ untouched:
 |------|-----|
 | `EoBCoreEngine::go` | Skips the original-save import. Its modal prompt has nobody to dismiss it, and startup blocks in the dialogue loop until the process is asked to quit. |
 | `EoBCoreEngine::runDialogue` | Returns a scripted answer from `--eob-dialog-answers` instead of waiting for a button press. |
-| `EoBCoreEngine::delay` | Returns immediately. The single choke point for timed waits; `KyraRpgEngine::delayUntil` routes through it. |
+| `EoBCoreEngine::delay` | Returns immediately. The single choke point for timed waits; `KyraRpgEngine::delayUntil` routes through it. During a sequence play it advances the virtual clock by what it skips. |
+| `DarkMoonEngine::seq_playFinale` | During a sequence play, photographs the last screen and leaves the wait for a skip, which nothing sends headlessly. |
 | `TextDisplayer_rpg::displayWaitButton` | Returns immediately; it otherwise spins on `processDialogue()` waiting for a click. |
 | `TextDisplayer_rpg::textPageBreak` | Same, for the "more" prompt. |
 | `TextDisplayer_rpg::printMessage` | Returns immediately. Message rendering is pure presentation and segfaults when driven outside the screen state it assumes. |
@@ -387,6 +534,7 @@ sweep is reproducible on any installation.
 * Engine hook: `engines/kyra/engine/eobcommon.cpp`, in `EoBCoreEngine::go()` (just after `loadItemDefs()`).
 * Friend declarations for engine state access: `engines/kyra/engine/eobcommon.h`, `engines/kyra/engine/kyra_rpg.h`.
 * Sequence capture points (`--eob-sequence-prefix`): `engines/kyra/engine/eobcommon.cpp` (`EoBCoreEngine::drawSequenceBitmap` and `EoBCoreEngine::delay`) and `engines/kyra/text/text_rpg.cpp` (`TextDisplayer_rpg::printDialogueText`, the numbered-page overload); CLI option in `base/commandLine.cpp`.
+* Sequence plays (`--eob-play-sequence`): `ScreenshotHarness::playSequence`, the virtual clock and the `capturePlay*` points in `engines/kyra/engine/screenshot_harness.cpp`; the capture calls and clock reads in `engines/kyra/sequence/sequences_darkmoon.cpp` (`DarkmoonSequenceHelper`, `seq_playIntro`, `seq_playFinale`, `seq_playCredits`); the clock read in `KyraRpgEngine::delayUntil` (`engines/kyra/engine/kyra_rpg.cpp`) and its advance in `EoBCoreEngine::delay`; `friend class ScreenshotHarness` on `Screen` (`engines/kyra/graphics/screen.h`, for `_screenPalette`) and on `DarkMoonEngine` (`engines/kyra/engine/darkmoon.h`, for `seq_playIntro`); CLI option in `base/commandLine.cpp`.
 
 ## Modifying the harness
 
@@ -395,7 +543,7 @@ The `harness` branch serves both `mm5e` and `griddelve`. Treat shared infrastruc
 Before changing shared code:
 
 * Build the fork (`./configure ...; make -j$(nproc)`).
-* Run a smoke test against the consumer you are working on. For mm5e that means `scripts/capture-scummvm-refs.sh` against a few reference cells, or `task test:integration` if it covers the area you touched. For griddelve, the equivalent reference-capture script.
+* Run a smoke test against the consumer you are working on. For mm5e that means `scripts/capture-scummvm-refs.sh` with `OUTDIR` pointed at a scratch directory, compared byte for byte against the committed `internal/refs/scummvm/*.png`. Its `task test` does not invoke the fork, so passing it is necessary but says little, and mm5e has no `task test:integration`. For griddelve, `scripts/capture-scummvm-refs.sh` with `OUTDIR` in a scratch directory and `SEEDS` pointed at the committed `internal/refs/scummvm/triggers/hand-seeds.txt` (without it the seeded sweeps are skipped, because the default seeds path lies under `OUTDIR`), compared byte for byte against the committed PNGs, state snapshots and trigger sweeps.
 * If you can run both consumers, do so. If you cannot, dispatch a sub-agent that can, or ask the user before pushing.
 
 Engine-specific changes (anything under `engines/mm/xeen/` or `engines/kyra/`) are lower-risk but still benefit from a smoke test on the affected project.
