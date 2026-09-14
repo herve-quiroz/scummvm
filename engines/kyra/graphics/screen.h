@@ -584,6 +584,9 @@ private:
 };
 
 class Screen {
+// The EOB2 reference harness photographs _screenPalette, the palette fades
+// and flashes change without touching palette slot 0.
+friend class ScreenshotHarness;
 public:
 	enum {
 		SCREEN_W = 320,

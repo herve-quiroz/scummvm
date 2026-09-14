@@ -22,6 +22,7 @@
 #ifdef ENABLE_EOB
 
 #include "kyra/engine/darkmoon.h"
+#include "kyra/engine/screenshot_harness.h"
 #include "kyra/graphics/screen_eob.h"
 #include "kyra/resource/resource.h"
 #include "kyra/sound/sound.h"
@@ -365,7 +366,7 @@ void DarkMoonEngine::seq_playIntro() {
 
 	sq.loadScene(1, 2);
 	sq.waitForSongNotifier(++songCurPos);
-	uint32 endtime = _system->getMillis();
+	uint32 endtime = ScreenshotHarness::sequenceMillis();
 
 	// intro horizontal scroll
 	if (!skipFlag() && !shouldQuit()) {
@@ -893,6 +894,9 @@ void DarkMoonEngine::seq_playFinale() {
 		if (_configRenderMode != Common::kRenderEGA)
 			sq.setPaletteWithoutTextColor(0);
 		_screen->crossFadeRegion(0, 0, 8, 8, 304, 128, 2, 0);
+		// Photograph the finished dissolve under --eob-play-sequence; a
+		// no-op otherwise.
+		ScreenshotHarness::capturePlayDissolve();
 	}
 	sq.delay(18);
 
@@ -942,6 +946,7 @@ void DarkMoonEngine::seq_playFinale() {
 		if (_configRenderMode != Common::kRenderEGA)
 			sq.setPaletteWithoutTextColor(0);
 		_screen->crossFadeRegion(0, 0, 8, 8, 304, 128, 2, 0);
+		ScreenshotHarness::capturePlayDissolve();
 	}
 
 	if (!skipFlag() && !shouldQuit())
@@ -1034,7 +1039,10 @@ void DarkMoonEngine::seq_playFinale() {
 		sq.setPalette(9);
 	sq.fadePalette(0, 18);
 
-	while (!skipFlag() && !shouldQuit()) {
+	// Under --eob-play-sequence, photograph the last screen and leave the
+	// wait for a skip, which nothing sends headlessly; a no-op otherwise.
+	ScreenshotHarness::capturePlayFinal();
+	while (!skipFlag() && !shouldQuit() && !ScreenshotHarness::sequencePlayActive()) {
 		sq.updateAmigaSound();
 		delay(_tickLength);
 	}
@@ -1071,20 +1079,20 @@ void DarkMoonEngine::seq_playCredits(DarkmoonSequenceHelper *sq, const uint8 *da
 	memset(items, 0, sizeof(items));
 
 	const char *pos = (const char *)data;
-	uint32 end = _system->getMillis();
+	uint32 end = ScreenshotHarness::sequenceMillis();
 	uint32 cur = 0;
 	int i = 0;
 
 	do {
 		for (bool loop = true; loop;) {
 			sq->processDelayedPaletteFade();
-			cur = _system->getMillis();
+			cur = ScreenshotHarness::sequenceMillis();
 			if (end <= cur)
 				break;
 			delay(MIN<uint32>(_tickLength, end - cur));
 		}
 
-		end = _system->getMillis() + ((speed * _tickLength) >> 1);
+		end = ScreenshotHarness::sequenceMillis() + ((speed * _tickLength) >> 1);
 
 		for (; i < 35 && *pos; i++) {
 			int16 nextY = i ? items[i].y + items[i].size + (items[i].size >> 2) : dm->h;
@@ -1158,6 +1166,9 @@ void DarkMoonEngine::seq_playCredits(DarkmoonSequenceHelper *sq, const uint8 *da
 
 		_screen->copyRegion(dm->sx << 3, dm->sy, dm->sx << 3, dm->sy, dm->w << 3, dm->h, tempPage, 0, Screen::CR_NO_P_CHECK);
 		_screen->updateScreen();
+		// Photograph each credits step under --eob-play-sequence; a no-op
+		// otherwise.
+		ScreenshotHarness::capturePlayCredits();
 
 		if (-items[1].size > items[1].y) {
 			delete[] items[1].str;
@@ -1218,6 +1229,7 @@ DarkmoonSequenceHelper::~DarkmoonSequenceHelper() {
 }
 
 void DarkmoonSequenceHelper::loadScene(int index, int pageNum, bool ignorePalette) {
+	ScreenshotHarness::SequenceScope scope;
 	Common::String file;
 	Common::SeekableReadStream *s = 0;
 	uint32 chunkID = 0;
@@ -1292,18 +1304,28 @@ void DarkmoonSequenceHelper::loadScene(int index, int pageNum, bool ignorePalett
 
 	_screen->convertPage(pageNum | 1, pageNum, 0);
 
-	if ((pageNum == 0 || pageNum == 1) && !_vm->skipFlag() && !_vm->shouldQuit())
+	if ((pageNum == 0 || pageNum == 1) && !_vm->skipFlag() && !_vm->shouldQuit()) {
 		_screen->updateScreen();
+		// A scene loaded straight onto the screen; a no-op outside
+		// --eob-play-sequence.
+		ScreenshotHarness::capturePlayScene(index);
+	}
 }
 
 void DarkmoonSequenceHelper::animCommand(int index, int del) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return;
 
 	index += _platformAnimOffset;
 	uint32 end = 0;
 
-	for (const DarkMoonAnimCommand *s = _config->animData[index]; s->command != 0xFF && !_vm->skipFlag() && !_vm->shouldQuit(); s++) {
+	// Under --eob-play-sequence each case photographs its record after the
+	// draw and the palette set and before the hold (command 6 after its
+	// sound); capturePlayAnim is a no-op otherwise.
+	const DarkMoonAnimCommand *const first = _config->animData[index];
+
+	for (const DarkMoonAnimCommand *s = first; s->command != 0xFF && !_vm->skipFlag() && !_vm->shouldQuit(); s++) {
 		updateAmigaSound();
 
 		int palIndex = s->pal + _config->animPalOffs;
@@ -1321,6 +1343,7 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 			// flash palette
 			if (_vm->_configRenderMode != Common::kRenderEGA && s->pal)
 				setPaletteWithoutTextColor(palIndex);
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			delay(s->delay);
 			if (_vm->_configRenderMode != Common::kRenderEGA && _config->animCmdRestorePal && s->pal)
 				setPaletteWithoutTextColor(0);
@@ -1348,6 +1371,7 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 			else
 				_screen->updateScreen();
 
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			delay(s->delay);
 
 			if (_config->animCmd1ShapeFrame == 0) {
@@ -1370,6 +1394,7 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 			else if (!_screen->_curPage)
 				_screen->updateScreen();
 
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			delay(s->delay);
 
 			if (_vm->_configRenderMode != Common::kRenderEGA && _config->animCmdRestorePal && s->pal)
@@ -1408,9 +1433,10 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 				else
 					_screen->copyRegion(s->x1 - 8, s->y1 - 8, s->x1, s->y1, shapeWidth, shapeHeight, 2, 0, Screen::CR_NO_P_CHECK);
 				_screen->updateScreen();
+				ScreenshotHarness::capturePlayAnim(index, s - first, s);
 				delay(s->delay);
 			} else if (_vm->gameFlags().platform == Common::kPlatformAmiga) {
-				end = _system->getMillis() + s->delay * _vm->tickLength();
+				end = ScreenshotHarness::sequenceMillis() + s->delay * _vm->tickLength();
 
 				if (--palIndex) {
 					uint8 obj = (palIndex - 1) * 10 + s->obj;
@@ -1422,12 +1448,13 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 				}
 				_screen->updateScreen();
 
+				ScreenshotHarness::capturePlayAnim(index, s - first, s);
 				_vm->delayUntil(end);
 			} else {
 				_screen->enableShapeBackgroundFading(true);
 				_screen->setShapeFadingLevel(1);
 
-				end = _system->getMillis() + s->delay * _vm->tickLength();
+				end = ScreenshotHarness::sequenceMillis() + s->delay * _vm->tickLength();
 
 				if (palIndex) {
 					_screen->setFadeTable(_fadingTables[palIndex - 1]);
@@ -1443,6 +1470,7 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 				}
 				_screen->updateScreen();
 
+				ScreenshotHarness::capturePlayAnim(index, s - first, s);
 				_vm->delayUntil(end);
 				_screen->enableShapeBackgroundFading(false);
 				_screen->setShapeFadingLevel(0);
@@ -1457,6 +1485,7 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 
 			_screen->copyRegion(s->x2 << 3, s->y2, s->x1, s->y1, s->w << 3, s->h, s->obj ? _config->animCmd5AltPage : 2, 0, Screen::CR_NO_P_CHECK);
 			_screen->updateScreen();
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			delay(s->delay);
 			break;
 
@@ -1464,10 +1493,12 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 			// play sound effect
 			if (s->obj != 0xFF)
 				_vm->snd_playSoundEffect(s->obj);
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			break;
 
 		case 7:
 			// restore background (only used in EGA mode)
+			ScreenshotHarness::capturePlayAnim(index, s - first, s);
 			delay(s->delay);
 			_screen->copyRegion(s->x1 - 8, s->y1 - 8, s->x1, s->y1, (_shapes[s->obj][2] + 1) << 3, _shapes[s->obj][3], 2, 0, Screen::CR_NO_P_CHECK);
 			_screen->updateScreen();
@@ -1479,8 +1510,10 @@ void DarkmoonSequenceHelper::animCommand(int index, int del) {
 		}
 	}
 
-	if (del > 0)
+	if (del > 0) {
+		ScreenshotHarness::capturePlayTrailingHold(index, del);
 		delay(del);
+	}
 }
 
 void DarkmoonSequenceHelper::setPlatformAnimIndexOffset(int offset) {
@@ -1488,8 +1521,12 @@ void DarkmoonSequenceHelper::setPlatformAnimIndexOffset(int offset) {
 }
 
 void DarkmoonSequenceHelper::printText(int index, int color) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return;
+
+	// The colour the sequence asked for, before VGA moves it to slot 255.
+	const int requestedColor = color;
 
 	_screen->setClearScreenDim(17);
 
@@ -1527,9 +1564,12 @@ void DarkmoonSequenceHelper::printText(int index, int color) {
 		_screen->fadePalette(*_palettes[0], 20);
 	else
 		_screen->updateScreen();
+
+	ScreenshotHarness::capturePlayText(index, requestedColor);
 }
 
 void DarkmoonSequenceHelper::fadeText() {
+	ScreenshotHarness::SequenceScope scope;
 	uint8 col = _vm->gameFlags().platform == Common::kPlatformAmiga ? 31 : 255;
 
 	if (_vm->skipFlag() || _vm->shouldQuit()) {
@@ -1548,9 +1588,12 @@ void DarkmoonSequenceHelper::fadeText() {
 	// We clear the shadow as quick as possible after the fading, so it will look less weird.
 	if (_vm->gameFlags().lang == Common::ZH_TWN)
 		_screen->updateScreen();
+
+	ScreenshotHarness::capturePlayUntext();
 }
 
 void DarkmoonSequenceHelper::update(int srcPage) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return;
 
@@ -1563,13 +1606,17 @@ void DarkmoonSequenceHelper::update(int srcPage) {
 		setPaletteWithoutTextColor(0);
 
 	_screen->updateScreen();
+	ScreenshotHarness::capturePlayUpdate(srcPage);
 }
 
 void DarkmoonSequenceHelper::setPalette(int index) {
+	ScreenshotHarness::SequenceScope scope;
 	_screen->setScreenPalette(*_palettes[index]);
+	ScreenshotHarness::capturePlayPalette(index, 0);
 }
 
 void DarkmoonSequenceHelper::fadePalette(int index, int del) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return;
 	if (_vm->_configRenderMode == Common::kRenderEGA) {
@@ -1578,6 +1625,7 @@ void DarkmoonSequenceHelper::fadePalette(int index, int del) {
 	} else {
 		_screen->fadePalette(*_palettes[index], del * _vm->tickLength());
 	}
+	ScreenshotHarness::capturePlayPalette(index, del);
 }
 
 void DarkmoonSequenceHelper::copyPalette(int srcIndex, int destIndex) {
@@ -1586,13 +1634,13 @@ void DarkmoonSequenceHelper::copyPalette(int srcIndex, int destIndex) {
 
 int DarkmoonSequenceHelper::hScroll(bool restart) {
 	if (restart) {
-		_hScrollStartTimeStamp = _system->getMillis();
+		_hScrollStartTimeStamp = ScreenshotHarness::sequenceMillis();
 		_hScrollState = -1;
 	} else if (!_hScrollStartTimeStamp) {
 		return 0;
 	}
 
-	uint32 ct = _system->getMillis();
+	uint32 ct = ScreenshotHarness::sequenceMillis();
 	int state = (ct - _hScrollStartTimeStamp) / 18;
 	if (state < 0 || state > 279) {
 		_hScrollStartTimeStamp += (ct - _hScrollResumeTimeStamp);
@@ -1607,6 +1655,9 @@ int DarkmoonSequenceHelper::hScroll(bool restart) {
 		_screen->copyRegion(9, 8, 8, 8, 303, 128, 0, 0, Screen::CR_NO_P_CHECK);
 		_screen->copyRegion(state, 0, 311, 8, 1, 128, 2, 0, Screen::CR_NO_P_CHECK);
 		_screen->updateScreen();
+		// Every state the scroll reaches, wherever it is driven from; a
+		// no-op outside --eob-play-sequence.
+		ScreenshotHarness::capturePlayScroll(state);
 	}
 
 	_hScrollState = state;
@@ -1624,19 +1675,20 @@ void DarkmoonSequenceHelper::initDelayedPaletteFade(int palIndex, int rate) {
 
 	_fadePalIndex = palIndex;
 	_fadePalRate = rate;
-	_fadePalTimer = _system->getMillis() + 2 * _vm->_tickLength;
+	_fadePalTimer = ScreenshotHarness::sequenceMillis() + 2 * _vm->_tickLength;
 }
 
 bool DarkmoonSequenceHelper::processDelayedPaletteFade() {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return true;
 
-	if (_vm->_configRenderMode == Common::kRenderEGA || !_fadePalRate || (_system->getMillis() <= _fadePalTimer))
+	if (_vm->_configRenderMode == Common::kRenderEGA || !_fadePalRate || (ScreenshotHarness::sequenceMillis() <= _fadePalTimer))
 		return false;
 
 	if (_screen->delayedFadePalStep(_palettes[_fadePalIndex], _palettes[0], _fadePalRate)) {
 		setPaletteWithoutTextColor(0);
-		_fadePalTimer = _system->getMillis() + 3 * _vm->_tickLength;
+		_fadePalTimer = ScreenshotHarness::sequenceMillis() + 3 * _vm->_tickLength;
 	} else {
 		_fadePalRate = 0;
 	}
@@ -1645,24 +1697,34 @@ bool DarkmoonSequenceHelper::processDelayedPaletteFade() {
 }
 
 void DarkmoonSequenceHelper::delay(uint32 ticks) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->skipFlag() || _vm->shouldQuit())
 		return;
 
-	uint32 end = _system->getMillis() + ticks * _vm->_tickLength;
+	// A bare hold, photographed before it is held; a no-op outside
+	// --eob-play-sequence and for the holds another helper method takes.
+	ScreenshotHarness::capturePlayHold(ticks);
+
+	uint32 end = ScreenshotHarness::sequenceMillis() + ticks * _vm->_tickLength;
 
 	if (_config->palFading) {
 		do {
 			if (processDelayedPaletteFade())
 				break;
 			_vm->updateInput();
-		} while (end > _system->getMillis());
+			// A sequence play's clock only moves through _vm->delay, so this
+			// busy wait steps it by one millisecond a turn, the finest the
+			// wall clock it polls would show; a no-op otherwise.
+			if (ScreenshotHarness::sequencePlayActive())
+				_vm->delay(1);
+		} while (end > ScreenshotHarness::sequenceMillis());
 		processDelayedPaletteFade();
 
 	} else {
 		for (uint32 ct = 0; ct < end; ) {
 			if (ct + 18 <= end)
 				hScroll();
-			ct = _system->getMillis();
+			ct = ScreenshotHarness::sequenceMillis();
 			_vm->delay(MIN<uint32>(9, end - ct));
 		}
 	}
@@ -1870,14 +1932,19 @@ void DarkmoonSequenceHelper::init(DarkmoonSequenceHelper::Mode mode) {
 }
 
 void DarkmoonSequenceHelper::setPaletteWithoutTextColor(int index) {
+	ScreenshotHarness::SequenceScope scope;
 	if (_vm->_configRenderMode == Common::kRenderEGA || _vm->skipFlag() || _vm->shouldQuit())
 		return;
 
 	int numCol = (_vm->gameFlags().platform == Common::kPlatformAmiga) ? 31 : 255;
 
 	if (_vm->gameFlags().platform != Common::kPlatformAmiga) {
-		if (!memcmp(_palettes[11]->getData(), _palettes[index]->getData(), numCol * 3))
+		if (!memcmp(_palettes[11]->getData(), _palettes[index]->getData(), numCol * 3)) {
+			// Already on screen, so nothing changes, but the call is still
+			// a capture point under --eob-play-sequence.
+			ScreenshotHarness::capturePlayPalette(index, 0);
 			return;
+		}
 	}
 
 	_palettes[11]->copy(*_palettes[index], 0, numCol);
@@ -1891,6 +1958,8 @@ void DarkmoonSequenceHelper::setPaletteWithoutTextColor(int index) {
 		_screen->updateScreen();
 		_system->delayMillis(10);
 	}
+
+	ScreenshotHarness::capturePlayPalette(index, 0);
 }
 
 void DarkmoonSequenceHelper::printStringIntern(const char *str, int x, int y, int col) {

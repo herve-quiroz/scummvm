@@ -1975,6 +1975,9 @@ void EoBCoreEngine::delay(uint32 millis, bool, bool) {
 		// The wait is skipped, but --eob-sequence-prefix still photographs
 		// the screen a delay inside a sequence would have held.
 		ScreenshotHarness::captureSequenceDelay(millis);
+		// A sequence play (--eob-play-sequence) moves its virtual clock by
+		// what was skipped, so the sequence code's deadlines still pass.
+		ScreenshotHarness::advanceSequenceClock(millis);
 		return;
 	}
 

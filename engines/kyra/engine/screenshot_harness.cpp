@@ -37,9 +37,11 @@
 #include <stdlib.h>
 
 #include "common/config-manager.h"
+#include "common/crc.h"
 #include "common/file.h"
 #include "common/fs.h"
 #include "common/str.h"
+#include "common/system.h"
 #include "common/textconsole.h"
 #include "common/tokenizer.h"
 #include "common/util.h"
@@ -47,9 +49,11 @@
 #include "image/png.h"
 #include "kyra/detection.h"
 #include "kyra/kyra_v1.h"
+#include "kyra/engine/darkmoon.h"
 #include "kyra/engine/eobcommon.h"
 #include "kyra/graphics/screen.h"
 #include "kyra/script/script_eob.h"
+#include "kyra/sound/sound.h"
 
 namespace Kyra {
 
@@ -58,8 +62,12 @@ static bool haveSetting(const char *key) {
 }
 
 bool ScreenshotHarness::isEnabled() {
+	// The sequence prefix enables the harness on its own as well, so that
+	// parseSettings can refuse it without a mode that captures anything,
+	// rather than the engine booting into the main menu and waiting there.
 	return haveSetting("screenshot") || haveSetting("eob_dump_state")
-		|| haveSetting("eob_batch") || haveSetting("eob_fire_triggers");
+		|| haveSetting("eob_batch") || haveSetting("eob_fire_triggers")
+		|| haveSetting("eob_play_sequence") || haveSetting("eob_sequence_prefix");
 }
 
 // Scripted dialogue answers, consumed in order by runDialogue. A headless
@@ -141,6 +149,21 @@ static bool g_seqArmed = false;
 static uint16 g_seqBlock = 0;
 static EoBCoreEngine *g_seqVm = nullptr;
 
+// Sequence plays (--eob-play-sequence). The intro and the finale are
+// played by DarkmoonSequenceHelper, which paces itself on the wall clock
+// rather than through EoBCoreEngine::delay, so the play runs on a virtual
+// clock the skipped delays advance, and photographs the helper's own
+// events rather than the script-sequence points above.
+static bool g_seqPlaying = false;
+static const char *g_seqPlayName = "";
+static uint32 g_seqClock = 0;
+static int g_seqDepth = 0;
+static uint g_seqCreditsStep = 0;
+
+// The virtual clock starts well above zero, because hScroll reads a zero
+// start timestamp as "no scroll running".
+static const uint32 kSequenceClockBase = 0x10000;
+
 bool ScreenshotHarness::openSequenceCapture(const Common::String &prefix, Common::String &err) {
 	const Common::Path tracePath = Common::Path::fromCommandLine(prefix + ".trace.txt");
 	Common::DumpFile *trace = new Common::DumpFile();
@@ -177,16 +200,7 @@ void ScreenshotHarness::endSequenceCapture() {
 	g_seqArmed = false;
 }
 
-void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
-	const uint n = g_seqCount++;
-	const Common::Path png = Common::Path::fromCommandLine(
-		Common::String::format("%s.%03u.png", g_seqPrefix.c_str(), n));
-	Common::String err;
-	if (!writePagePng(g_seqVm, png, err)) {
-		warning("Screenshot harness: %s", err.c_str());
-		_exit(1);
-	}
-	const Common::String line = Common::String::format("%03u %s", n, event.c_str());
+void ScreenshotHarness::writeSequenceTraceLine(const Common::String &line) {
 	g_seqTrace->writeString(line + "\n");
 	// Flushed per line for the same reason the sweep flushes per trigger:
 	// the process leaves through _exit, and a script that hangs mid-sequence
@@ -195,6 +209,182 @@ void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
 	// Mirrored into the opcode log, where the HARNESS-TRIGGER markers name
 	// the invocation kind the trace line does not.
 	debugC(3, kDebugLevelScript, "HARNESS-SEQUENCE %s", line.c_str());
+}
+
+void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
+	const uint n = g_seqCount++;
+	const Common::Path png = Common::Path::fromCommandLine(
+		Common::String::format("%s.%04u.png", g_seqPrefix.c_str(), n));
+	Common::String err;
+	if (!writePagePng(g_seqVm, png, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+	writeSequenceTraceLine(Common::String::format("%04u %s", n, event.c_str()));
+}
+
+bool ScreenshotHarness::sequencePlayActive() {
+	return g_seqPlaying;
+}
+
+uint32 ScreenshotHarness::sequenceMillis() {
+	return g_seqPlaying ? g_seqClock : g_system->getMillis();
+}
+
+void ScreenshotHarness::advanceSequenceClock(uint32 millis) {
+	if (g_seqPlaying)
+		g_seqClock += millis;
+}
+
+ScreenshotHarness::SequenceScope::SequenceScope() {
+	++g_seqDepth;
+}
+
+ScreenshotHarness::SequenceScope::~SequenceScope() {
+	--g_seqDepth;
+}
+
+// True while a play runs and the helper method asking is not called from
+// another captured helper method: printText's palette set, animCommand's
+// holds and update's palette set belong to the capture of the call that
+// made them.
+static bool playOutermost() {
+	return g_seqPlaying && g_seqDepth == 1;
+}
+
+void ScreenshotHarness::emitPlayCapture(const Common::String &event) {
+	const uint n = g_seqCount++;
+	const Common::Path png = Common::Path::fromCommandLine(
+		Common::String::format("%s.%04u.png", g_seqPrefix.c_str(), n));
+	Common::String err;
+	byte pal6[256 * 3];
+	if (!writeScreenPalettePng(g_seqVm, png, pal6, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+	// The digest puts a palette divergence in the trace, apart from the
+	// pixels: a flash or a fade to black leaves page 0 as it was.
+	const uint32 crc = Common::CRC32().crcFast(pal6, sizeof(pal6));
+	writeSequenceTraceLine(Common::String::format("%04u %s palette=%08x",
+		n, event.c_str(), (uint)crc));
+}
+
+void ScreenshotHarness::capturePlayAnim(int table, int rec, const DarkMoonAnimCommand *s) {
+	if (!playOutermost())
+		return;
+	// The record's own fields, x1 as stored (before animCommand halves a
+	// value at or above 320), so a transcription can print the same line
+	// from its table.
+	emitPlayCapture(Common::String::format(
+		"anim seq=%s table=%d rec=%d cmd=%u obj=%u x1=%d y1=%u ticks=%u pal=%u x2=%u y2=%u w=%u h=%u",
+		g_seqPlayName, table, rec, (uint)s->command, (uint)s->obj, (int)s->x1, (uint)s->y1,
+		(uint)s->delay, (uint)s->pal, (uint)s->x2, (uint)s->y2, (uint)s->w, (uint)s->h));
+}
+
+void ScreenshotHarness::capturePlayTrailingHold(int table, uint32 ticks) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("hold seq=%s table=%d ticks=%u",
+		g_seqPlayName, table, (uint)ticks));
+}
+
+void ScreenshotHarness::capturePlayHold(uint32 ticks) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("hold seq=%s ticks=%u", g_seqPlayName, (uint)ticks));
+}
+
+void ScreenshotHarness::capturePlayScene(int index) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("scene seq=%s index=%d", g_seqPlayName, index));
+}
+
+void ScreenshotHarness::capturePlayUpdate(int page) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("update seq=%s page=%d", g_seqPlayName, page));
+}
+
+void ScreenshotHarness::capturePlayText(int index, int color) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("text seq=%s index=%d color=%d",
+		g_seqPlayName, index, color));
+}
+
+void ScreenshotHarness::capturePlayUntext() {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("untext seq=%s", g_seqPlayName));
+}
+
+void ScreenshotHarness::capturePlayPalette(int index, int ticks) {
+	if (!playOutermost())
+		return;
+	emitPlayCapture(Common::String::format("palette seq=%s index=%d ticks=%d",
+		g_seqPlayName, index, ticks));
+}
+
+void ScreenshotHarness::capturePlayDissolve() {
+	if (!g_seqPlaying)
+		return;
+	emitPlayCapture(Common::String::format("dissolve seq=%s", g_seqPlayName));
+}
+
+void ScreenshotHarness::capturePlayScroll(int state) {
+	if (!g_seqPlaying)
+		return;
+	emitPlayCapture(Common::String::format("scroll seq=%s state=%d", g_seqPlayName, state));
+}
+
+void ScreenshotHarness::capturePlayCredits() {
+	if (!g_seqPlaying)
+		return;
+	emitPlayCapture(Common::String::format("credits seq=%s step=%u",
+		g_seqPlayName, g_seqCreditsStep++));
+}
+
+void ScreenshotHarness::capturePlayFinal() {
+	if (!g_seqPlaying)
+		return;
+	emitPlayCapture(Common::String::format("final seq=%s", g_seqPlayName));
+}
+
+void ScreenshotHarness::playSequence(EoBCoreEngine *vm, const Settings &s) {
+	DarkMoonEngine *dm = static_cast<DarkMoonEngine *>(vm);
+	const bool intro = s.playSequence == "intro";
+
+	// Seeded as the sweeps seed it: the finale's dissolves shuffle their
+	// pixel order with _rnd.
+	vm->_rnd.setSeed(0x5EED);
+
+	g_seqVm = vm;
+	g_seqPlayName = intro ? "intro" : "finale";
+	g_seqClock = kSequenceClockBase;
+	g_seqDepth = 0;
+	g_seqCreditsStep = 0;
+	g_seqPlaying = true;
+
+	// waitForSongNotifier waits on the music driver only when the music
+	// type is AdLib, so the type decides whether a play can stall there.
+	debug("Screenshot harness: playing the %s (music type %d, music %s)",
+		g_seqPlayName, (int)vm->sound()->getMusicType(),
+		vm->sound()->musicEnabled() ? "enabled" : "disabled");
+
+	if (intro) {
+		// What DarkMoonEngine::mainMenu does before its first choice, the intro.
+		vm->sound()->selectAudioResourceSet(kMusicIntro);
+		vm->sound()->loadSoundFile(0);
+		dm->seq_playIntro();
+	} else {
+		// What the tail of EoBCoreEngine::go does, less the party-transfer
+		// autosave before it: the harness writes no save.
+		vm->sound()->selectAudioResourceSet(kMusicFinale);
+		dm->seq_playFinale();
+	}
+
+	g_seqPlaying = false;
 }
 
 void ScreenshotHarness::captureSequenceFrame(const char *file, int destRect, int x1, int y1, int flags) {
@@ -251,11 +441,33 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	const bool haveDump = haveSetting("eob_dump_state");
 	const bool haveBatch = haveSetting("eob_batch");
 	const bool haveTrig = haveSetting("eob_fire_triggers");
+	const bool havePlay = haveSetting("eob_play_sequence");
 
-	if (!haveShot && !haveDump && !haveBatch && !haveTrig) {
-		err = "one of --screenshot=PATH, --eob-dump-state=PATH, --eob-fire-triggers=PATH "
-			"or --eob-batch=FILE is required";
+	if (!haveShot && !haveDump && !haveBatch && !haveTrig && !havePlay) {
+		err = "one of --screenshot=PATH, --eob-dump-state=PATH, --eob-fire-triggers=PATH, "
+			"--eob-batch=FILE or --eob-play-sequence=intro|finale is required";
 		return false;
+	}
+	// A sequence play leaves the engine wherever the sequence left it and
+	// exits, so it stands alone, and it produces nothing but captures, so
+	// it needs somewhere to write them.
+	if (havePlay) {
+		const Common::String raw = ConfMan.get("eob_play_sequence");
+		if (raw != "intro" && raw != "finale") {
+			err = Common::String::format(
+				"--eob-play-sequence=%s invalid (expected intro or finale)", raw.c_str());
+			return false;
+		}
+		if (haveShot || haveDump || haveBatch || haveTrig) {
+			err = "--eob-play-sequence cannot be combined with --screenshot, --eob-dump-state, "
+				"--eob-fire-triggers or --eob-batch";
+			return false;
+		}
+		if (!haveSetting("eob_sequence_prefix")) {
+			err = "--eob-play-sequence=intro|finale requires --eob-sequence-prefix=PATH";
+			return false;
+		}
+		out.playSequence = raw;
 	}
 	if (haveTrig)
 		out.fireTriggersPath = Common::Path::fromCommandLine(ConfMan.get("eob_fire_triggers"));
@@ -276,12 +488,14 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 		}
 		out.handItem = atoi(raw.c_str());
 	}
-	// Sequence captures are only taken while a trigger fires, so the prefix
-	// is refused without a mode that fires any: accepting it would write an
-	// empty trace and read as "nothing was drawn".
+	// Sequence captures are only taken while a trigger fires or a sequence
+	// plays, so the prefix is refused without a mode that does either:
+	// accepting it would write an empty trace and read as "nothing was
+	// drawn".
 	if (haveSetting("eob_sequence_prefix")) {
-		if (!haveTrig && !haveBatch) {
-			err = "--eob-sequence-prefix=PATH requires --eob-fire-triggers=PATH or --eob-batch=FILE";
+		if (!haveTrig && !haveBatch && !havePlay) {
+			err = "--eob-sequence-prefix=PATH requires --eob-fire-triggers=PATH, --eob-batch=FILE "
+				"or --eob-play-sequence=intro|finale";
 			return false;
 		}
 		out.sequencePrefix = ConfMan.get("eob_sequence_prefix");
@@ -298,7 +512,8 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	// on its own lines, so the command line does not have to. A state dump
 	// needs a level but no viewpoint, because a snapshot describes the
 	// whole level rather than what the party can see.
-	const bool needLevel = !haveBatch;
+	// A sequence play draws no level, so it needs none either.
+	const bool needLevel = !haveBatch && !havePlay;
 	const bool needPosition = haveShot && !haveBatch;
 
 	// Save slot is optional. ScummVM's standard --save-slot=N (alias -x N)
@@ -539,6 +754,45 @@ bool ScreenshotHarness::writePagePng(EoBCoreEngine *vm, const Common::Path &path
 	// Page 0 is the visible front buffer; updateScreen() above made sure
 	// it carries the freshly composed frame. getPagePtr() is protected,
 	// so use the public copyRegionToBuffer() to grab the full page.
+	byte pageBuf[Screen::SCREEN_W * Screen::SCREEN_H];
+	vm->_screen->copyRegionToBuffer(0, 0, 0, Screen::SCREEN_W, Screen::SCREEN_H, pageBuf);
+
+	Graphics::Surface surf;
+	surf.init(Screen::SCREEN_W, Screen::SCREEN_H, Screen::SCREEN_W,
+		pageBuf, Graphics::PixelFormat::createFormatCLUT8());
+
+	if (!Image::writePNG(out, surf, palette)) {
+		err = Common::String::format("writePNG failed for '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		out.close();
+		return false;
+	}
+
+	out.close();
+	return true;
+}
+
+bool ScreenshotHarness::writeScreenPalettePng(EoBCoreEngine *vm, const Common::Path &path,
+		byte *pal6, Common::String &err) {
+	Common::DumpFile out;
+	if (!out.open(path)) {
+		err = Common::String::format("cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	// The palette on screen, not writePagePng's slot 0. The intro and the
+	// finale put their flashes, their fades and their black screens on the
+	// screen palette alone, so slot 0 would show those frames in the
+	// scene's full colours. Expanded from six bits the way
+	// Screen::setScreenPalette expands it, integer division included.
+	const Palette &onScreen = *static_cast<Screen *>(vm->_screen)->_screenPalette;
+	memset(pal6, 0, 256 * 3);
+	memcpy(pal6, onScreen.getData(), MIN(onScreen.getNumColors(), 256) * 3);
+	byte palette[256 * 3];
+	for (int i = 0; i < 256 * 3; ++i)
+		palette[i] = (pal6[i] * 0xFF) / 0x3F;
+
 	byte pageBuf[Screen::SCREEN_W * Screen::SCREEN_H];
 	vm->_screen->copyRegionToBuffer(0, 0, 0, Screen::SCREEN_W, Screen::SCREEN_H, pageBuf);
 
@@ -1157,6 +1411,13 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	}
 
 	bootstrap(vm, s);
+
+	if (!s.playSequence.empty()) {
+		playSequence(vm, s);
+		closeSequenceCapture();
+		debug("Screenshot harness: played the %s, %u capture(s)", s.playSequence.c_str(), g_seqCount);
+		_exit(0);
+	}
 
 	if (!s.batchPath.empty()) {
 		if (!runBatch(vm, s.batchPath, err, s.handItem)) {

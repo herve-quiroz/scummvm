@@ -24,6 +24,10 @@
 #include "kyra/engine/kyra_rpg.h"
 #include "kyra/sound/sound.h"
 
+#ifdef ENABLE_EOB
+#include "kyra/engine/screenshot_harness.h"
+#endif
+
 #include "backends/keymapper/keymap.h"
 #include "backends/keymapper/action.h"
 
@@ -378,7 +382,14 @@ uint16 KyraRpgEngine::processDialogue() {
 }
 
 void KyraRpgEngine::delayUntil(uint32 time, bool, bool doUpdate, bool isMainLoop) {
+#ifdef ENABLE_EOB
+	// A sequence play under the EOB2 reference harness (--eob-play-sequence)
+	// sets its deadlines on the harness's virtual clock; this reads the wall
+	// clock otherwise.
+	uint32 curTime = ScreenshotHarness::sequenceMillis();
+#else
 	uint32 curTime = _system->getMillis();
+#endif
 	if (time > curTime)
 		delay(time - curTime, doUpdate, isMainLoop);
 }

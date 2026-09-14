@@ -30,6 +30,7 @@
 namespace Kyra {
 
 class EoBCoreEngine;
+struct DarkMoonAnimCommand;
 
 /**
  * One-shot screenshot harness for the EOB2 (KYRA) engine.
@@ -90,6 +91,12 @@ public:
 		// of <prefix>.trace.txt.
 		Common::String sequencePrefix;
 
+		// Sequence to play (--eob-play-sequence), "intro" or "finale".
+		// Empty means "not requested". When set, the harness plays that
+		// sequence on a virtual clock, photographing it through the
+		// sequence prefix, and exits; no other mode may be combined with it.
+		Common::String playSequence;
+
 		uint8 level;
 		uint8 cellX;
 		uint8 cellY;
@@ -109,8 +116,10 @@ public:
 	};
 
 	/**
-	 * @returns true if any harness mode was requested on the command
-	 *          line (--screenshot, --eob-dump-state or --eob-batch).
+	 * @returns true if any harness flag is on the command line
+	 *          (--screenshot, --eob-dump-state, --eob-batch,
+	 *          --eob-fire-triggers, --eob-play-sequence or
+	 *          --eob-sequence-prefix).
 	 */
 	static bool isEnabled();
 
@@ -161,6 +170,65 @@ public:
 	static void captureSequenceFrame(const char *file, int destRect, int x1, int y1, int flags);
 	static void captureSequencePage(int textId, const char *label);
 	static void captureSequenceDelay(uint32 millis);
+
+	/**
+	 * Sequence plays (--eob-play-sequence). While DarkMoonEngine::seq_playIntro
+	 * or seq_playFinale runs under the harness, the sequence code reads a
+	 * harness-owned millisecond clock instead of the wall clock, and
+	 * EoBCoreEngine::delay advances it by what it skips, so every hold,
+	 * scroll, delayed fade and credits step runs at once with a repeatable
+	 * step count.
+	 *
+	 * @returns true while a sequence play is running.
+	 */
+	static bool sequencePlayActive();
+
+	/**
+	 * @returns the virtual clock while a sequence play runs, and
+	 *          g_system->getMillis() otherwise, so a call site reading it
+	 *          behaves as before in normal play and in the other modes.
+	 */
+	static uint32 sequenceMillis();
+
+	/** Advance the virtual clock by @p millis; a no-op outside a play. */
+	static void advanceSequenceClock(uint32 millis);
+
+	/**
+	 * Marks a DarkmoonSequenceHelper method as running. The helper's
+	 * methods call one another (printText sets a palette, animCommand holds
+	 * through delay, update sets a palette), and only the outermost call is
+	 * a capture point, so a scoped counter decides which calls photograph.
+	 */
+	class SequenceScope {
+	public:
+		SequenceScope();
+		~SequenceScope();
+	};
+
+	/**
+	 * Sequence play capture points. Each writes <prefix>.NNNN.png of page 0
+	 * in the palette on screen, and one trace line carrying that palette's
+	 * CRC-32, and is a no-op outside a play.
+	 *
+	 * capturePlayAnim, capturePlayTrailingHold, capturePlayHold,
+	 * capturePlayScene, capturePlayUpdate, capturePlayText,
+	 * capturePlayUntext and capturePlayPalette photograph only from the
+	 * outermost helper method (see SequenceScope). capturePlayScroll,
+	 * capturePlayCredits, capturePlayDissolve and capturePlayFinal
+	 * photograph wherever they are reached.
+	 */
+	static void capturePlayAnim(int table, int rec, const DarkMoonAnimCommand *s);
+	static void capturePlayTrailingHold(int table, uint32 ticks);
+	static void capturePlayHold(uint32 ticks);
+	static void capturePlayScene(int index);
+	static void capturePlayUpdate(int page);
+	static void capturePlayText(int index, int color);
+	static void capturePlayUntext();
+	static void capturePlayPalette(int index, int ticks);
+	static void capturePlayDissolve();
+	static void capturePlayScroll(int state);
+	static void capturePlayCredits();
+	static void capturePlayFinal();
 
 	/**
 	 * Write a canonical engine state snapshot for the currently loaded
@@ -222,8 +290,29 @@ private:
 	static void beginSequenceCapture(EoBCoreEngine *vm, uint16 block);
 	static void endSequenceCapture();
 
-	/** Write the next PNG and its trace line, `NNN <event>`. */
+	/** Write the next PNG and its trace line, `NNNN <event>`. */
 	static void emitSequenceCapture(const Common::String &event);
+
+	/**
+	 * Write page 0 as it stands, in the palette on screen
+	 * (Screen::_screenPalette, what fades and flashes change) rather than
+	 * palette slot 0, to @p path as a PNG. @p pal6 receives the 768 six-bit
+	 * palette bytes the PNG palette was expanded from.
+	 */
+	static bool writeScreenPalettePng(EoBCoreEngine *vm, const Common::Path &path,
+		byte *pal6, Common::String &err);
+
+	/** Write the next play PNG and its trace line, `NNNN <event> palette=<crc>`. */
+	static void emitPlayCapture(const Common::String &event);
+
+	/** Append @p line to the sequence trace, flush it, and mirror it to the Script log. */
+	static void writeSequenceTraceLine(const Common::String &line);
+
+	/**
+	 * Play the sequence --eob-play-sequence names from the bootstrapped
+	 * state, on the virtual clock, with the play's capture points armed.
+	 */
+	static void playSequence(EoBCoreEngine *vm, const Settings &s);
 
 	/**
 	 * Execute a batch script. @p handItem is the hand seed a `triggers`

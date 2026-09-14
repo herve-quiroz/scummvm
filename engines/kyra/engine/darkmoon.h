@@ -46,6 +46,7 @@ struct DarkMoonAnimCommand {
 class DarkMoonEngine : public EoBCoreEngine {
 friend class GUI_EoB;
 friend class DarkmoonSequenceHelper;
+friend class ScreenshotHarness;
 public:
 	DarkMoonEngine(OSystem *system, const GameFlags &flags);
 	~DarkMoonEngine() override;

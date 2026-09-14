@@ -190,8 +190,12 @@ static const char HELP_STRING4[] =
 	"                           picked it up would carry it. 0 (default) seeds nothing.\n"
 	"                           A batch 'triggers' line takes it as an optional 4th field.\n"
 	"  --eob-sequence-prefix=PATH [EOB2] With --eob-fire-triggers or a batch 'triggers' line:\n"
-	"                           while a firing runs, write <PATH>.NNN.png after each sequence\n"
+	"                           while a firing runs, write <PATH>.NNNN.png after each sequence\n"
 	"                           frame, page and in-sequence delay, plus <PATH>.trace.txt.\n"
+	"                           With --eob-play-sequence: at each capture point of the play.\n"
+	"  --eob-play-sequence=NAME [EOB2] Play the reference's 'intro' or 'finale' (credits\n"
+	"                           included) on a virtual clock, photographing it through\n"
+	"                           --eob-sequence-prefix (required), then exit.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1176,6 +1180,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-sequence-prefix")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-play-sequence")
 			END_OPTION
 
 unknownOption:
