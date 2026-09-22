@@ -22,6 +22,10 @@
 #include "kyra/sound/sound_intern.h"
 #include "kyra/sound/drivers/pc_base.h"
 
+#ifdef ENABLE_EOB
+#include "kyra/engine/screenshot_harness.h"
+#endif
+
 #include "common/system.h"
 #include "common/config-manager.h"
 
@@ -259,6 +263,13 @@ void SoundPC_v1::internalLoadFile(const Common::Path &file) {
 
 	delete[] fileData;
 	delete[] oldData;
+
+#ifdef ENABLE_EOB
+	// Recorded where the load succeeds, so the EOB2 reference harness's
+	// sound trace names the area file a level actually pulled in and
+	// says nothing when the file was already loaded.
+	ScreenshotHarness::logSoundFile(path.baseName());
+#endif
 
 	_soundFileLoaded = path;
 }

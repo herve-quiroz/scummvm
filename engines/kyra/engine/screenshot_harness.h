@@ -30,6 +30,7 @@
 namespace Kyra {
 
 class EoBCoreEngine;
+class KyraRpgEngine;
 struct DarkMoonAnimCommand;
 
 /**
@@ -91,6 +92,12 @@ public:
 		// of <prefix>.trace.txt.
 		Common::String sequencePrefix;
 
+		// Sound trace output (--eob-sound-trace). Empty means "not
+		// requested". Rides a trigger sweep: every sound the reference
+		// asks for while the sweep runs is logged, under the firing
+		// that asked for it.
+		Common::Path soundTracePath;
+
 		// Sequence to play (--eob-play-sequence), "intro" or "finale".
 		// Empty means "not requested". When set, the harness plays that
 		// sequence on a virtual clock, photographing it through the
@@ -118,8 +125,8 @@ public:
 	/**
 	 * @returns true if any harness flag is on the command line
 	 *          (--screenshot, --eob-dump-state, --eob-batch,
-	 *          --eob-fire-triggers, --eob-play-sequence or
-	 *          --eob-sequence-prefix).
+	 *          --eob-fire-triggers, --eob-play-sequence,
+	 *          --eob-sequence-prefix or --eob-sound-trace).
 	 */
 	static bool isEnabled();
 
@@ -231,6 +238,34 @@ public:
 	static void capturePlayFinal();
 
 	/**
+	 * Sound trace points (--eob-sound-trace). Each writes one request
+	 * line to the trace, indented under the firing that made the
+	 * request, and is a no-op unless the trace is open, so normal play
+	 * and the other harness modes are untouched.
+	 *
+	 * logScriptSound records the script's own 0xF6 instruction, from
+	 * EoBInfProcessor::oeob_playSoundEffect and before the branch that
+	 * picks a wrapper, so it names what the adventure asked for rather
+	 * than what the engine dispatched. The other points record the
+	 * engine's own requests, which a firing reaches through doors,
+	 * items, timers and sprites as well as through a script.
+	 *
+	 * logEnvironmentalSound is called above
+	 * KyraRpgEngine::snd_processEnvironmentalSoundEffect's early return
+	 * and computes the block distance itself, because that return fires
+	 * whenever sound effects are disabled (the capture runs under
+	 * --music-driver=null) and the reference computes its distance
+	 * after it.
+	 */
+	static void logScriptSound(int soundId, int block);
+	static void logEnvironmentalSound(KyraRpgEngine *vm, int soundId, int block);
+	static void logSoundEffect(int track, int volume);
+	static void logSong(int track, bool loop);
+	static void logStopSound();
+	static void logFadeOut(int del);
+	static void logSoundFile(const Common::String &name);
+
+	/**
 	 * Write a canonical engine state snapshot for the currently loaded
 	 * level to @p path.
 	 *
@@ -284,10 +319,23 @@ private:
 	static void closeSequenceCapture();
 
 	/**
-	 * Arm the capture points for one firing of @p block, and disarm them
-	 * after it. Arming is a no-op when no trace is open.
+	 * Open (truncating) the sound trace at @p path and write its header,
+	 * naming @p level. @returns false and sets @p err if it cannot be
+	 * written.
 	 */
-	static void beginSequenceCapture(EoBCoreEngine *vm, uint16 block);
+	static bool openSoundTrace(const Common::Path &path, int level, Common::String &err);
+
+	/** Finalize and close the sound trace, if one is open. */
+	static void closeSoundTrace();
+
+	/**
+	 * Arm the capture points for one firing of @p block with invocation
+	 * kind @p invoke, and disarm them after it. Arming the sequence
+	 * captures is a no-op when no sequence trace is open; the firing's
+	 * identity is recorded regardless, because the sound trace names the
+	 * firing a request belongs to and the two traces are independent.
+	 */
+	static void beginSequenceCapture(EoBCoreEngine *vm, uint16 block, int invoke);
 	static void endSequenceCapture();
 
 	/** Write the next PNG and its trace line, `NNNN <event>`. */

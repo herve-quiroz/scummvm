@@ -77,9 +77,10 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-hand-item` | no (default 0) | decimal item-table index | With `--eob-fire-triggers` (or a batch `triggers` line): put that item-table record into the party's hand before each firing, as a player who had picked it up would carry it. 0 seeds nothing. Ignored by the other modes. See "Trigger sweeps" below. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
 | `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers`, a batch `triggers` line or `--eob-play-sequence`: write `<prefix>.NNNN.png` at each capture point plus a sidecar `<prefix>.trace.txt`. Refused without one of those modes. See "Sequence captures" and "Sequence plays" below. |
+| `--eob-sound-trace` | no | absolute filesystem path | With `--eob-fire-triggers` (required): log every sound the reference asks for while the sweep runs, one line per request under the firing that made it. Additive: it changes no other output. See "Sound traces" below. |
 | `--eob-play-sequence` | no | `intro` or `finale` | Play the reference's intro (`DarkMoonEngine::seq_playIntro`) or finale (`seq_playFinale`, credits included) from a fresh bootstrap on a virtual clock, photographing it through `--eob-sequence-prefix` (required), then exit. Presence enables harness mode. Needs no `--level`, `--cell` or `--facing`. Refused with `--screenshot`, `--eob-dump-state`, `--eob-fire-triggers` or `--eob-batch`. Not forced headless: set `SDL_VIDEODRIVER=dummy`. See "Sequence plays" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`, `eob_sound_trace`.
 
 ### State snapshots
 
@@ -220,6 +221,67 @@ the reference format.
 
 All 15 levels sweep in about 12 seconds in one batched process, producing roughly 1560
 firings across 1005 trigger blocks.
+
+### Sound traces
+
+`--eob-sound-trace=PATH` logs every sound the reference asks for while a trigger sweep
+runs, so a consumer can check its own sound model against what EOB2 requests and where.
+It rides `--eob-fire-triggers` and is refused without it (a trace of a run that fires
+nothing would read as "the reference asked for nothing"). It writes its own file and
+changes no other output: a sweep's `.trig` is byte-identical with the flag and without it.
+
+```
+# eob2-sound v1
+level 4
+file name=forest.ADL
+stop
+firing 145 invoke=40
+  stop
+  script sound=55 block=0
+  sfx track=55 volume=255
+```
+
+Each request is one line. A request made while a firing runs is indented two spaces under
+a `firing <block> invoke=<hex2>` header naming that firing, written the first time the
+firing asks for anything; a firing that asks for nothing writes no header, so the file
+records what happened rather than what did not. A request made outside a firing is
+unindented: the level's own sound file load before the first firing, and the halt and
+reload the sweep's per-firing level reset causes between firings.
+
+| Line | Where | Meaning |
+|------|-------|---------|
+| `script sound=<id> block=<b>` | `EoBInfProcessor::oeob_playSoundEffect`, after its two operands are read and before its branch | The script instruction (opcode 0xF6) itself, so the line is what the adventure asked for rather than which wrapper the engine dispatched to. `block` 0 is the party's own sound. |
+| `env sound=<id> block=<b> from=<party block> dist=<d> threshold=<t>` | `KyraRpgEngine::snd_processEnvironmentalSoundEffect`, above its `sfxEnabled` early return | A sound placed on a block. |
+| `sfx track=<id> volume=<v>` | `EoBCoreEngine::snd_playSoundEffect` entry | A sound effect, including the tracks the function's own range check then drops. |
+| `song track=<t> loop=<0\|1>` | `EoBCoreEngine::snd_playSong` entry | Music. |
+| `stop` | `EoBCoreEngine::snd_stopSound` | |
+| `fade del=<n>` | `EoBCoreEngine::snd_fadeOut` | `del` is the argument, 160 by default. The PC driver ignores it. |
+| `file name=<NAME.ADL>` | `SoundPC_v1::internalLoadFile`, where the load succeeds | The area file a level pulled in. Nothing is written when the file was already loaded, so a level reset onto the same level is silent. |
+
+The `env` line's `dist` is computed in the hook rather than read from the engine, because
+`snd_processEnvironmentalSoundEffect` returns at its first line unless sound effects are
+enabled and computes its distance after that, and the harness captures under
+`--music-driver=null`. It is `KyraRpgEngine::getBlockDistance(_currentBlock, block)`, and 0
+for block 0, which the reference never measures. `threshold` is `_envSfxDistThreshold` as
+the run configured it: `--music-driver=null` detects as `MT_NULL`, which EOB2 builds as
+`Sound::kPCjr`, so it is **3**, where a DOS AdLib install gives **15**. Recording both lets
+a consumer apply the rule of the configuration it models rather than inherit the capture's
+driver by accident.
+
+The trace is truncated when the process starts and flushed per line, for the same reason
+the sweep flushes per firing: the process leaves through `_exit`. Each line is also
+mirrored as `HARNESS-SOUND <line>` with `--debuglevel=3 --debugflags=Script`, beside the
+`HARNESS-TRIGGER block=<b> invoke=<k>` markers.
+
+Measured on the DOS English data with `--music-driver=null`: level 4's 25 firings ask for
+something in 13 of them, and two sweeps of the level write byte-identical traces.
+
+```bash
+./scummvm --path="/path/to/EOB2/" --extrapath="$PWD/dists/engine-data" \
+    --music-driver=null -m 0 -s 0 -r 0 \
+    --eob-fire-triggers=/tmp/L4.trig --eob-sound-trace=/tmp/L4.snd \
+    --level=4 eob2
+```
 
 ### Sequence captures
 
@@ -534,6 +596,7 @@ sweep is reproducible on any installation.
 * Engine hook: `engines/kyra/engine/eobcommon.cpp`, in `EoBCoreEngine::go()` (just after `loadItemDefs()`).
 * Friend declarations for engine state access: `engines/kyra/engine/eobcommon.h`, `engines/kyra/engine/kyra_rpg.h`.
 * Sequence capture points (`--eob-sequence-prefix`): `engines/kyra/engine/eobcommon.cpp` (`EoBCoreEngine::drawSequenceBitmap` and `EoBCoreEngine::delay`) and `engines/kyra/text/text_rpg.cpp` (`TextDisplayer_rpg::printDialogueText`, the numbered-page overload); CLI option in `base/commandLine.cpp`.
+* Sound traces (`--eob-sound-trace`): `ScreenshotHarness::openSoundTrace`, `closeSoundTrace` and the `log*` points in `engines/kyra/engine/screenshot_harness.cpp`; the hooks in `engines/kyra/script/script_eob.cpp` (`EoBInfProcessor::oeob_playSoundEffect`), `engines/kyra/engine/eobcommon.cpp` (`snd_playSong`, `snd_playSoundEffect`, `snd_stopSound`, `snd_fadeOut`), `engines/kyra/engine/kyra_rpg.cpp` (`snd_processEnvironmentalSoundEffect`, under `#ifdef ENABLE_EOB` as `delayUntil` is) and `engines/kyra/sound/sound_pc_v1.cpp` (`internalLoadFile`, under the same guard, since that file is built for every Kyra game); the firing's block and invocation reach the hooks through `beginSequenceCapture`; CLI option in `base/commandLine.cpp`.
 * Sequence plays (`--eob-play-sequence`): `ScreenshotHarness::playSequence`, the virtual clock and the `capturePlay*` points in `engines/kyra/engine/screenshot_harness.cpp`; the capture calls and clock reads in `engines/kyra/sequence/sequences_darkmoon.cpp` (`DarkmoonSequenceHelper`, `seq_playIntro`, `seq_playFinale`, `seq_playCredits`); the clock read in `KyraRpgEngine::delayUntil` (`engines/kyra/engine/kyra_rpg.cpp`) and its advance in `EoBCoreEngine::delay`; `friend class ScreenshotHarness` on `Screen` (`engines/kyra/graphics/screen.h`, for `_screenPalette`) and on `DarkMoonEngine` (`engines/kyra/engine/darkmoon.h`, for `seq_playIntro`); CLI option in `base/commandLine.cpp`.
 
 ## Modifying the harness

@@ -630,6 +630,11 @@ int EoBInfProcessor::oeob_playSoundEffect(int8 *data) {
 	uint16 block = READ_LE_UINT16(pos);
 	pos += 2;
 
+	// The instruction's own operands, recorded before the branch below
+	// picks a wrapper: the trace records what the adventure asked for,
+	// not which of the engine's two sound paths ran it.
+	ScreenshotHarness::logScriptSound(snd, block);
+
 	if (_vm->gameFlags().platform == Common::kPlatformSegaCD && (snd == 28 || snd == 133))
 		snd |= 0x1000;
 

@@ -65,9 +65,13 @@ bool ScreenshotHarness::isEnabled() {
 	// The sequence prefix enables the harness on its own as well, so that
 	// parseSettings can refuse it without a mode that captures anything,
 	// rather than the engine booting into the main menu and waiting there.
+	// The sound trace is in the list for the same reason: it rides a
+	// trigger sweep and captures nothing on its own, so parseSettings
+	// refuses it with a message rather than the run silently ignoring it.
 	return haveSetting("screenshot") || haveSetting("eob_dump_state")
 		|| haveSetting("eob_batch") || haveSetting("eob_fire_triggers")
-		|| haveSetting("eob_play_sequence") || haveSetting("eob_sequence_prefix");
+		|| haveSetting("eob_play_sequence") || haveSetting("eob_sequence_prefix")
+		|| haveSetting("eob_sound_trace");
 }
 
 // Scripted dialogue answers, consumed in order by runDialogue. A headless
@@ -149,6 +153,18 @@ static bool g_seqArmed = false;
 static uint16 g_seqBlock = 0;
 static EoBCoreEngine *g_seqVm = nullptr;
 
+// Sound trace (--eob-sound-trace). Every sound the reference asks for
+// while a trigger sweep runs, written as one request line under a
+// header naming the firing that made it. Requests made before the first
+// firing (the level's sound file above all) sit unindented in a
+// preamble, and a firing that asks for nothing writes no header, so the
+// file records what happened rather than what did not.
+static Common::DumpFile *g_sndTrace = nullptr;
+static uint16 g_sndBlock = 0;
+static int g_sndInvoke = 0;
+static bool g_sndFiring = false;
+static bool g_sndFiringNamed = false;
+
 // Sequence plays (--eob-play-sequence). The intro and the finale are
 // played by DarkmoonSequenceHelper, which paces itself on the wall clock
 // rather than through EoBCoreEngine::delay, so the play runs on a virtual
@@ -188,7 +204,15 @@ void ScreenshotHarness::closeSequenceCapture() {
 	g_seqTrace = nullptr;
 }
 
-void ScreenshotHarness::beginSequenceCapture(EoBCoreEngine *vm, uint16 block) {
+void ScreenshotHarness::beginSequenceCapture(EoBCoreEngine *vm, uint16 block, int invoke) {
+	// The firing's identity is recorded whether or not a sequence trace
+	// is open: the sound trace names the firing each request belongs to,
+	// and the two traces are requested by separate flags.
+	g_sndBlock = block;
+	g_sndInvoke = invoke;
+	g_sndFiring = true;
+	g_sndFiringNamed = false;
+
 	if (!g_seqTrace)
 		return;
 	g_seqVm = vm;
@@ -198,6 +222,7 @@ void ScreenshotHarness::beginSequenceCapture(EoBCoreEngine *vm, uint16 block) {
 
 void ScreenshotHarness::endSequenceCapture() {
 	g_seqArmed = false;
+	g_sndFiring = false;
 }
 
 void ScreenshotHarness::writeSequenceTraceLine(const Common::String &line) {
@@ -221,6 +246,111 @@ void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
 		_exit(1);
 	}
 	writeSequenceTraceLine(Common::String::format("%04u %s", n, event.c_str()));
+}
+
+bool ScreenshotHarness::openSoundTrace(const Common::Path &path, int level, Common::String &err) {
+	Common::DumpFile *trace = new Common::DumpFile();
+	if (!trace->open(path)) {
+		delete trace;
+		err = Common::String::format("cannot open '%s' for writing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+	g_sndTrace = trace;
+	g_sndFiring = false;
+	g_sndFiringNamed = false;
+	g_sndTrace->writeString("# eob2-sound v1\n");
+	g_sndTrace->writeString(Common::String::format("level %d\n", level));
+	g_sndTrace->flush();
+	return true;
+}
+
+void ScreenshotHarness::closeSoundTrace() {
+	if (!g_sndTrace)
+		return;
+	g_sndTrace->finalize();
+	g_sndTrace->close();
+	delete g_sndTrace;
+	g_sndTrace = nullptr;
+}
+
+// Append one request line, naming the firing it belongs to the first
+// time that firing asks for anything.
+static void writeSoundRequest(const Common::String &request) {
+	if (!g_sndTrace)
+		return;
+
+	Common::String line;
+	if (g_sndFiring) {
+		if (!g_sndFiringNamed) {
+			line += Common::String::format("firing %u invoke=%02x\n",
+				(uint)g_sndBlock, g_sndInvoke);
+			g_sndFiringNamed = true;
+		}
+		line += "  ";
+	}
+	line += request;
+	line += "\n";
+
+	g_sndTrace->writeString(line);
+	// Flushed per line for the same reason the sequence trace is: the
+	// process leaves through _exit, and a script that hangs should still
+	// leave a record of what it asked for.
+	g_sndTrace->flush();
+	// Mirrored into the opcode log, where the HARNESS-TRIGGER markers
+	// name the firing alongside the opcodes that ran.
+	debugC(3, kDebugLevelScript, "HARNESS-SOUND %s", request.c_str());
+}
+
+void ScreenshotHarness::logScriptSound(int soundId, int block) {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest(Common::String::format("script sound=%d block=%d", soundId, block));
+}
+
+void ScreenshotHarness::logEnvironmentalSound(KyraRpgEngine *vm, int soundId, int block) {
+	if (!g_sndTrace)
+		return;
+	// snd_processEnvironmentalSoundEffect computes its distance after the
+	// early return this point sits above, so the distance is computed
+	// here, exactly as the reference computes it (and zero for block 0,
+	// which the reference never measures). The threshold is recorded
+	// beside it because it depends on the music driver the run was given:
+	// 3 under --music-driver=null, 15 on a DOS AdLib install.
+	const int dist = block ? vm->getBlockDistance(vm->_currentBlock, block) : 0;
+	writeSoundRequest(Common::String::format(
+		"env sound=%d block=%d from=%u dist=%d threshold=%d",
+		soundId, block, (uint)vm->_currentBlock, dist, vm->_envSfxDistThreshold));
+}
+
+void ScreenshotHarness::logSoundEffect(int track, int volume) {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest(Common::String::format("sfx track=%d volume=%d", track, volume));
+}
+
+void ScreenshotHarness::logSong(int track, bool loop) {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest(Common::String::format("song track=%d loop=%d", track, loop ? 1 : 0));
+}
+
+void ScreenshotHarness::logStopSound() {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest("stop");
+}
+
+void ScreenshotHarness::logFadeOut(int del) {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest(Common::String::format("fade del=%d", del));
+}
+
+void ScreenshotHarness::logSoundFile(const Common::String &name) {
+	if (!g_sndTrace)
+		return;
+	writeSoundRequest(Common::String::format("file name=%s", name.c_str()));
 }
 
 bool ScreenshotHarness::sequencePlayActive() {
@@ -499,6 +629,17 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 			return false;
 		}
 		out.sequencePrefix = ConfMan.get("eob_sequence_prefix");
+	}
+	// The sound trace records what a firing asked for, so it rides the
+	// trigger sweep and is refused without one: accepting it would write
+	// a header and nothing else, which reads as "the reference asked for
+	// nothing".
+	if (haveSetting("eob_sound_trace")) {
+		if (!haveTrig) {
+			err = "--eob-sound-trace=PATH requires --eob-fire-triggers=PATH";
+			return false;
+		}
+		out.soundTracePath = Common::Path::fromCommandLine(ConfMan.get("eob_sound_trace"));
 	}
 	parseDialogueAnswers();
 	if (haveShot)
@@ -1139,7 +1280,7 @@ bool ScreenshotHarness::fireTriggers(EoBCoreEngine *vm, int level,
 			resetScriptBudget();
 			// Armed from here until the flights are drained, because the
 			// crossing and landing scripts are part of the same firing.
-			beginSequenceCapture(vm, block);
+			beginSequenceCapture(vm, block, invoke);
 			vm->runLevelScript(block, invoke);
 
 			// A script that launches an item (oeob_launchObject) parks it
@@ -1410,11 +1551,22 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		_exit(1);
 	}
 
+	// Opened before the bootstrap, so that the sound file the level load
+	// pulls in is recorded in the preamble. The level is the one the
+	// sweep below runs; --eob-sound-trace requires --eob-fire-triggers,
+	// which requires --level unless a save slot carries it.
+	if (!s.soundTracePath.empty()
+			&& !openSoundTrace(s.soundTracePath, s.haveLevel ? s.level : vm->_currentLevel, err)) {
+		warning("Screenshot harness: %s", err.c_str());
+		_exit(1);
+	}
+
 	bootstrap(vm, s);
 
 	if (!s.playSequence.empty()) {
 		playSequence(vm, s);
 		closeSequenceCapture();
+		closeSoundTrace();
 		debug("Screenshot harness: played the %s, %u capture(s)", s.playSequence.c_str(), g_seqCount);
 		_exit(0);
 	}
@@ -1425,6 +1577,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 			_exit(1);
 		}
 		closeSequenceCapture();
+		closeSoundTrace();
 		_exit(0);
 	}
 
@@ -1438,6 +1591,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 			s.fireTriggersPath.toString(Common::Path::kNativeSeparator).c_str());
 	}
 	closeSequenceCapture();
+	closeSoundTrace();
 
 	if (!s.dumpStatePath.empty()) {
 		if (!writeStateSnapshot(vm, s.dumpStatePath, err)) {

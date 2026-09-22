@@ -196,6 +196,9 @@ static const char HELP_STRING4[] =
 	"  --eob-play-sequence=NAME [EOB2] Play the reference's 'intro' or 'finale' (credits\n"
 	"                           included) on a virtual clock, photographing it through\n"
 	"                           --eob-sequence-prefix (required), then exit.\n"
+	"  --eob-sound-trace=PATH   [EOB2] With --eob-fire-triggers (required): log every sound\n"
+	"                           request the reference makes during the sweep to PATH, one\n"
+	"                           line per request under the firing that made it.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1183,6 +1186,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-play-sequence")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-sound-trace")
 			END_OPTION
 
 unknownOption:

@@ -406,6 +406,14 @@ int KyraRpgEngine::rollDice(int times, int pips, int inc) {
 }
 
 bool KyraRpgEngine::snd_processEnvironmentalSoundEffect(int soundId, int block) {
+#ifdef ENABLE_EOB
+	// Above the early return below, which fires whenever sound effects
+	// are disabled (the EOB2 reference harness captures under
+	// --music-driver=null), and so before the distance this request
+	// would have been judged by is computed. The harness computes it
+	// itself for the same reason.
+	ScreenshotHarness::logEnvironmentalSound(this, soundId, block);
+#endif
 	if (!_sound->sfxEnabled() || shouldQuit())
 		return false;
 

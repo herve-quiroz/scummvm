@@ -2944,12 +2944,14 @@ uint32 EoBCoreEngine::countArrows() const {
 }
 
 void EoBCoreEngine::snd_playSong(int track, bool loop) {
+	ScreenshotHarness::logSong(track, loop);
 	if (_flags.platform == Common::kPlatformSegaCD && !loop)
 		track |= 0x80;
 	_sound->playTrack(track);
 }
 
 void EoBCoreEngine::snd_playSoundEffect(int track, int volume) {
+	ScreenshotHarness::logSoundEffect(track, volume);
 	if ((track < 1) || (_flags.gameID == GI_EOB2 && track > 119) || shouldQuit())
 		return;
 
@@ -2964,11 +2966,13 @@ void EoBCoreEngine::snd_playSoundEffect(int track, int volume) {
 }
 
 void EoBCoreEngine::snd_stopSound() {
+	ScreenshotHarness::logStopSound();
 	_sound->haltTrack();
 	_sound->stopAllSoundEffects();
 }
 
 void EoBCoreEngine::snd_fadeOut(int del) {
+	ScreenshotHarness::logFadeOut(del);
 	_sound->beginFadeOut(del);
 }
 
