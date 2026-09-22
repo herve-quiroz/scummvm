@@ -268,7 +268,7 @@ void SoundPC_v1::internalLoadFile(const Common::Path &file) {
 	// Recorded where the load succeeds, so the EOB2 reference harness's
 	// sound trace names the area file a level actually pulled in and
 	// says nothing when the file was already loaded.
-	ScreenshotHarness::logSoundFile(path.baseName());
+	ScreenshotHarness::logSoundFile(path);
 #endif
 
 	_soundFileLoaded = path;

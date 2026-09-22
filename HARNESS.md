@@ -77,7 +77,7 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-hand-item` | no (default 0) | decimal item-table index | With `--eob-fire-triggers` (or a batch `triggers` line): put that item-table record into the party's hand before each firing, as a player who had picked it up would carry it. 0 seeds nothing. Ignored by the other modes. See "Trigger sweeps" below. |
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
 | `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers`, a batch `triggers` line or `--eob-play-sequence`: write `<prefix>.NNNN.png` at each capture point plus a sidecar `<prefix>.trace.txt`. Refused without one of those modes. See "Sequence captures" and "Sequence plays" below. |
-| `--eob-sound-trace` | no | absolute filesystem path | With `--eob-fire-triggers` (required): log every sound the reference asks for while the sweep runs, one line per request under the firing that made it. Additive: it changes no other output. See "Sound traces" below. |
+| `--eob-sound-trace` | no | absolute filesystem path | With `--eob-fire-triggers` and `--level` (both required): log every sound the reference asks for while the sweep runs, one line per request under the firing that made it. Refused with `--eob-batch`, which would put several levels' firings under one level header. Additive: it changes no other output. See "Sound traces" below. |
 | `--eob-play-sequence` | no | `intro` or `finale` | Play the reference's intro (`DarkMoonEngine::seq_playIntro`) or finale (`seq_playFinale`, credits included) from a fresh bootstrap on a virtual clock, photographing it through `--eob-sequence-prefix` (required), then exit. Presence enables harness mode. Needs no `--level`, `--cell` or `--facing`. Refused with `--screenshot`, `--eob-dump-state`, `--eob-fire-triggers` or `--eob-batch`. Not forced headless: set `SDL_VIDEODRIVER=dummy`. See "Sequence plays" below. |
 
 ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`, `eob_sound_trace`.
@@ -251,27 +251,45 @@ reload the sweep's per-firing level reset causes between firings.
 | Line | Where | Meaning |
 |------|-------|---------|
 | `script sound=<id> block=<b>` | `EoBInfProcessor::oeob_playSoundEffect`, after its two operands are read and before its branch | The script instruction (opcode 0xF6) itself, so the line is what the adventure asked for rather than which wrapper the engine dispatched to. `block` 0 is the party's own sound. |
-| `env sound=<id> block=<b> from=<party block> dist=<d> threshold=<t>` | `KyraRpgEngine::snd_processEnvironmentalSoundEffect`, above its `sfxEnabled` early return | A sound placed on a block. |
+| `env sound=<id> block=<b> from=<party block> dist=<d> threshold=<t>` | `KyraRpgEngine::snd_processEnvironmentalSoundEffect`, above the early return that drops the request when sound effects are disabled or a quit is pending | A sound placed on a block. |
 | `sfx track=<id> volume=<v>` | `EoBCoreEngine::snd_playSoundEffect` entry | A sound effect, including the tracks the function's own range check then drops. |
 | `song track=<t> loop=<0\|1>` | `EoBCoreEngine::snd_playSong` entry | Music. |
 | `stop` | `EoBCoreEngine::snd_stopSound` | |
 | `fade del=<n>` | `EoBCoreEngine::snd_fadeOut` | `del` is the argument, 160 by default. The PC driver ignores it. |
-| `file name=<NAME.ADL>` | `SoundPC_v1::internalLoadFile`, where the load succeeds | The area file a level pulled in. Nothing is written when the file was already loaded, so a level reset onto the same level is silent. |
+| `file name=<area.ADL>` | `SoundPC_v1::internalLoadFile`, where the load succeeds | The area file a level pulled in, spelled as the engine builds it: the stem as the data file names it (lowercase on the DOS English data, `forest.ADL`) and the extension the driver appends. Nothing is written when the file was already loaded, so a level reset onto the same level is silent. |
 
 The `env` line's `dist` is computed in the hook rather than read from the engine, because
 `snd_processEnvironmentalSoundEffect` returns at its first line unless sound effects are
-enabled and computes its distance after that, and the harness captures under
-`--music-driver=null`. It is `KyraRpgEngine::getBlockDistance(_currentBlock, block)`, and 0
-for block 0, which the reference never measures. `threshold` is `_envSfxDistThreshold` as
-the run configured it: `--music-driver=null` detects as `MT_NULL`, which EOB2 builds as
-`Sound::kPCjr`, so it is **3**, where a DOS AdLib install gives **15**. Recording both lets
-a consumer apply the rule of the configuration it models rather than inherit the capture's
-driver by accident.
+enabled and no quit is pending, and computes its distance after that, and the harness
+captures under `--music-driver=null`. It is
+`KyraRpgEngine::getBlockDistance(_currentBlock, block)`, and 0 for block 0, which the
+reference never measures. `threshold` is `_envSfxDistThreshold` as the run configured it:
+`--music-driver=null` detects as `MT_NULL`, which EOB2 builds as `Sound::kPCjr`, so it is
+**3**, where a DOS AdLib install gives **15**. Recording both lets a consumer apply the rule
+of the configuration it models rather than inherit the capture's driver by accident.
 
-The trace is truncated when the process starts and flushed per line, for the same reason
-the sweep flushes per firing: the process leaves through `_exit`. Each line is also
-mirrored as `HARNESS-SOUND <line>` with `--debuglevel=3 --debugflags=Script`, beside the
-`HARNESS-TRIGGER block=<b> invoke=<k>` markers.
+Two more combinations are refused, both because the trace's `level` header is written before
+the bootstrap, so that the level's own sound file load lands in the preamble rather than
+being lost to `internalLoadFile`'s already-loaded return:
+
+* `--level=N` is required. The engine's current level is still 0 that early, so a
+  `--save-slot` sweep with no `--level` would head the trace `level 0` above the save's own
+  blocks.
+* `--eob-batch` is refused. A batch fires a different level on every `triggers` line through
+  one process, and one trace cannot head several levels' block numbering with one level.
+
+The trace is written through a `Common::DumpFile`, which writes to `PATH.tmp` and renames
+it over `PATH` when the stream is destroyed, so a run that dies without reaching the close
+leaves the previous `PATH` in place and its own bytes in the `.tmp` sidecar rather than a
+truncated `PATH`. Lines are flushed one at a time for the same reason the sweep flushes per
+firing (the process leaves through `_exit`), so a script that hangs leaves a record of what
+it asked for, readable in the sidecar. Every exit path the harness takes closes the trace,
+which is what produces `PATH`.
+
+Each request line is also mirrored as `HARNESS-SOUND <request>` with `--debuglevel=3
+--debugflags=Script`. The mirror carries the request alone, with no `firing` header and no
+indentation, because the `HARNESS-TRIGGER block=<b> invoke=<k>` markers in the same log
+already name the firing.
 
 Measured on the DOS English data with `--music-driver=null`: level 4's 25 firings ask for
 something in 13 of them, and two sweeps of the level write byte-identical traces.

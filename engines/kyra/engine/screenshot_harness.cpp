@@ -243,6 +243,7 @@ void ScreenshotHarness::emitSequenceCapture(const Common::String &event) {
 	Common::String err;
 	if (!writePagePng(g_seqVm, png, err)) {
 		warning("Screenshot harness: %s", err.c_str());
+		closeSoundTrace();
 		_exit(1);
 	}
 	writeSequenceTraceLine(Common::String::format("%04u %s", n, event.c_str()));
@@ -294,8 +295,11 @@ static void writeSoundRequest(const Common::String &request) {
 
 	g_sndTrace->writeString(line);
 	// Flushed per line for the same reason the sequence trace is: the
-	// process leaves through _exit, and a script that hangs should still
-	// leave a record of what it asked for.
+	// process leaves through _exit, so a script that hangs should still
+	// leave a record of what it asked for. Common::DumpFile writes
+	// through a temporary and renames it over the path when the stream
+	// is destroyed, so those flushed bytes are readable in PATH.tmp
+	// until closeSoundTrace runs; only the close produces PATH itself.
 	g_sndTrace->flush();
 	// Mirrored into the opcode log, where the HARNESS-TRIGGER markers
 	// name the firing alongside the opcodes that ran.
@@ -312,11 +316,12 @@ void ScreenshotHarness::logEnvironmentalSound(KyraRpgEngine *vm, int soundId, in
 	if (!g_sndTrace)
 		return;
 	// snd_processEnvironmentalSoundEffect computes its distance after the
-	// early return this point sits above, so the distance is computed
-	// here, exactly as the reference computes it (and zero for block 0,
-	// which the reference never measures). The threshold is recorded
-	// beside it because it depends on the music driver the run was given:
-	// 3 under --music-driver=null, 15 on a DOS AdLib install.
+	// early return this point sits above (sound effects disabled, or a
+	// quit pending), so the distance is computed here, exactly as the
+	// reference computes it (and zero for block 0, which the reference
+	// never measures). The threshold is recorded beside it because it
+	// depends on the music driver the run was given: 3 under
+	// --music-driver=null, 15 on a DOS AdLib install.
 	const int dist = block ? vm->getBlockDistance(vm->_currentBlock, block) : 0;
 	writeSoundRequest(Common::String::format(
 		"env sound=%d block=%d from=%u dist=%d threshold=%d",
@@ -347,10 +352,12 @@ void ScreenshotHarness::logFadeOut(int del) {
 	writeSoundRequest(Common::String::format("fade del=%d", del));
 }
 
-void ScreenshotHarness::logSoundFile(const Common::String &name) {
+void ScreenshotHarness::logSoundFile(const Common::Path &path) {
 	if (!g_sndTrace)
 		return;
-	writeSoundRequest(Common::String::format("file name=%s", name.c_str()));
+	// The base name is taken here rather than at the call site, so that
+	// a normal game builds no string for a point that is inert in it.
+	writeSoundRequest(Common::String::format("file name=%s", path.baseName().c_str()));
 }
 
 bool ScreenshotHarness::sequencePlayActive() {
@@ -390,6 +397,7 @@ void ScreenshotHarness::emitPlayCapture(const Common::String &event) {
 	byte pal6[256 * 3];
 	if (!writeScreenPalettePng(g_seqVm, png, pal6, err)) {
 		warning("Screenshot harness: %s", err.c_str());
+		closeSoundTrace();
 		_exit(1);
 	}
 	// The digest puts a palette divergence in the trace, apart from the
@@ -639,6 +647,25 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 			err = "--eob-sound-trace=PATH requires --eob-fire-triggers=PATH";
 			return false;
 		}
+		// A batch sweeps a different level on every `triggers` line
+		// through one process, so one trace would carry every level's
+		// firings, each in its own level's block numbering, under a
+		// single level header naming at most one of them.
+		if (haveBatch) {
+			err = "--eob-sound-trace=PATH cannot be combined with --eob-batch=FILE";
+			return false;
+		}
+		// The trace's header names the level before the bootstrap runs,
+		// so that the level's own sound file load lands in the preamble
+		// rather than being lost to internalLoadFile's already-loaded
+		// return. The engine's current level is still 0 that early, so
+		// the level has to come from the command line: without --level a
+		// save slot's sweep would write `level 0` above the save's own
+		// blocks.
+		if (!ConfMan.hasKey("level")) {
+			err = "--eob-sound-trace=PATH requires --level=N";
+			return false;
+		}
 		out.soundTracePath = Common::Path::fromCommandLine(ConfMan.get("eob_sound_trace"));
 	}
 	parseDialogueAnswers();
@@ -756,6 +783,7 @@ void ScreenshotHarness::bootstrap(EoBCoreEngine *vm, const Settings &s) {
 		if (loadErr.getCode() != Common::kNoError) {
 			warning("Screenshot harness: failed to load save slot %d: %s",
 				s.saveSlot, loadErr.getDesc().c_str());
+			closeSoundTrace();
 			_exit(1);
 		}
 
@@ -1553,8 +1581,9 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 
 	// Opened before the bootstrap, so that the sound file the level load
 	// pulls in is recorded in the preamble. The level is the one the
-	// sweep below runs; --eob-sound-trace requires --eob-fire-triggers,
-	// which requires --level unless a save slot carries it.
+	// sweep below runs: --eob-sound-trace requires --level, so that the
+	// header cannot name the pre-bootstrap level 0 while the sweep fires
+	// a save slot's own level.
 	if (!s.soundTracePath.empty()
 			&& !openSoundTrace(s.soundTracePath, s.haveLevel ? s.level : vm->_currentLevel, err)) {
 		warning("Screenshot harness: %s", err.c_str());
@@ -1574,6 +1603,7 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	if (!s.batchPath.empty()) {
 		if (!runBatch(vm, s.batchPath, err, s.handItem)) {
 			warning("Screenshot harness: %s", err.c_str());
+			closeSoundTrace();
 			_exit(1);
 		}
 		closeSequenceCapture();
@@ -1585,6 +1615,11 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		if (!fireTriggers(vm, s.haveLevel ? s.level : vm->_currentLevel,
 				s.fireTriggersPath, err, s.handItem)) {
 			warning("Screenshot harness: %s", err.c_str());
+			// Closed here too, because the trace is written through a
+			// Common::DumpFile: its bytes only reach PATH when the
+			// stream is destroyed, and a sweep that gives up halfway
+			// would otherwise leave nothing but PATH.tmp behind.
+			closeSoundTrace();
 			_exit(1);
 		}
 		debug("Screenshot harness: wrote %s",

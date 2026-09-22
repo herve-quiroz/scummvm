@@ -254,8 +254,12 @@ public:
 	 * KyraRpgEngine::snd_processEnvironmentalSoundEffect's early return
 	 * and computes the block distance itself, because that return fires
 	 * whenever sound effects are disabled (the capture runs under
-	 * --music-driver=null) and the reference computes its distance
-	 * after it.
+	 * --music-driver=null) or a quit is pending, and the reference
+	 * computes its distance after it.
+	 *
+	 * Each takes what the call site already has, so that a build with no
+	 * trace open formats nothing: logSoundFile takes the whole path and
+	 * reduces it to a base name behind its own guard.
 	 */
 	static void logScriptSound(int soundId, int block);
 	static void logEnvironmentalSound(KyraRpgEngine *vm, int soundId, int block);
@@ -263,7 +267,7 @@ public:
 	static void logSong(int track, bool loop);
 	static void logStopSound();
 	static void logFadeOut(int del);
-	static void logSoundFile(const Common::String &name);
+	static void logSoundFile(const Common::Path &path);
 
 	/**
 	 * Write a canonical engine state snapshot for the currently loaded
@@ -319,13 +323,18 @@ private:
 	static void closeSequenceCapture();
 
 	/**
-	 * Open (truncating) the sound trace at @p path and write its header,
-	 * naming @p level. @returns false and sets @p err if it cannot be
-	 * written.
+	 * Open the sound trace at @p path and write its header, naming
+	 * @p level. @returns false and sets @p err if it cannot be written.
 	 */
 	static bool openSoundTrace(const Common::Path &path, int level, Common::String &err);
 
-	/** Finalize and close the sound trace, if one is open. */
+	/**
+	 * Finalize and close the sound trace, if one is open. This is what
+	 * produces the file: Common::DumpFile writes through a temporary and
+	 * renames it over the path when the stream is destroyed, so every
+	 * exit path the harness takes has to come through here or leave
+	 * nothing but the sidecar.
+	 */
 	static void closeSoundTrace();
 
 	/**
