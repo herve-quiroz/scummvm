@@ -27,11 +27,21 @@
 #include "common/scummsys.h"
 #include "common/str.h"
 
+namespace Common {
+class WriteStream;
+}
+
+namespace OPL {
+class OPL;
+}
+
 namespace Kyra {
 
 class EoBCoreEngine;
 class KyraRpgEngine;
 struct DarkMoonAnimCommand;
+struct SoundRenderEvent;
+struct SoundRenderLine;
 
 /**
  * One-shot screenshot harness for the EOB2 (KYRA) engine.
@@ -104,6 +114,12 @@ public:
 		// sequence prefix, and exits; no other mode may be combined with it.
 		Common::String playSequence;
 
+		// Sound render script (--eob-sound-render). Empty means "not
+		// requested". When set, the harness renders every line of the
+		// script through a driver of its own that logs each OPL register
+		// write, and exits; no other mode may be combined with it.
+		Common::Path soundRenderPath;
+
 		uint8 level;
 		uint8 cellX;
 		uint8 cellY;
@@ -126,7 +142,8 @@ public:
 	 * @returns true if any harness flag is on the command line
 	 *          (--screenshot, --eob-dump-state, --eob-batch,
 	 *          --eob-fire-triggers, --eob-play-sequence,
-	 *          --eob-sequence-prefix or --eob-sound-trace).
+	 *          --eob-sequence-prefix, --eob-sound-trace or
+	 *          --eob-sound-render).
 	 */
 	static bool isEnabled();
 
@@ -270,6 +287,20 @@ public:
 	static void logSoundFile(const Common::Path &path);
 
 	/**
+	 * The recording chip for a sound render (--eob-sound-render).
+	 * AdLibDriver's constructor calls this before it would create a chip
+	 * of its own. While the harness is building a render's driver it
+	 * returns a new chip that logs every register write to the render's
+	 * output, stamped with the render's tick, and the driver owns it;
+	 * the driver then skips starting the chip's timer, because the
+	 * harness ticks it through PCSoundDriver::harnessTick.
+	 *
+	 * @returns nullptr at every other time, so the engine's own driver
+	 *          and the other Kyra games create their chip as before.
+	 */
+	static OPL::OPL *takeOplRenderChip();
+
+	/**
 	 * Write a canonical engine state snapshot for the currently loaded
 	 * level to @p path.
 	 *
@@ -370,6 +401,39 @@ private:
 	 * state, on the virtual clock, with the play's capture points armed.
 	 */
 	static void playSequence(EoBCoreEngine *vm, const Settings &s);
+
+	/**
+	 * Read and validate the sound render script at @p path into @p out,
+	 * checking every file it names against the data directory, so a bad
+	 * script is refused before anything is written. @returns false and
+	 * sets @p err on the first malformed line.
+	 */
+	static bool parseSoundScript(EoBCoreEngine *vm, const Common::Path &path,
+		Common::Array<SoundRenderLine> &out, Common::String &err);
+
+	/**
+	 * Run every line of the sound render script at @p path, one output
+	 * file per line. @returns false and sets @p err on failure.
+	 */
+	static bool runSoundRender(EoBCoreEngine *vm, const Common::Path &path, Common::String &err);
+
+	/**
+	 * Render @p events from a fresh driver until it is idle with no event
+	 * pending, or for @p budget callbacks, writing @p header, the init and
+	 * volume groups, the events' writes and markers, and the end line to
+	 * @p out.
+	 */
+	static void renderSound(EoBCoreEngine *vm, Common::WriteStream *out,
+		const Common::String &header, const Common::Array<SoundRenderEvent> &events,
+		uint32 budget);
+
+	/**
+	 * Fill @p out with a `tracks` line's renders for @p stem: every track
+	 * whose table entry is not 0xFF and whose program resolves, each with
+	 * its header line, from a fresh driver with the file loaded.
+	 */
+	static void listSoundTracks(EoBCoreEngine *vm, const Common::String &stem, int volume,
+		uint32 budget, Common::Array<Common::String> &headers, Common::Array<int> &tracks);
 
 	/**
 	 * Execute a batch script. @p handItem is the hand seed a `triggers`

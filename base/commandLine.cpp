@@ -199,6 +199,9 @@ static const char HELP_STRING4[] =
 	"  --eob-sound-trace=PATH   [EOB2] With --eob-fire-triggers (required): log every sound\n"
 	"                           request the reference makes during the sweep to PATH, one\n"
 	"                           line per request under the firing that made it.\n"
+	"  --eob-sound-render=SCRIPT [EOB2] Render each line of SCRIPT through a driver of\n"
+	"                           the harness's own, logging every OPL register write,\n"
+	"                           then exit. Needs --music-driver=null.\n"
 	"  --debug-channels-only    Show only the specified debug channels\n"
 	"  -u, --dump-scripts       Enable script dumping if a directory called 'dumps'\n"
 	"                           exists in the current directory\n"
@@ -1189,6 +1192,9 @@ Common::String parseCommandLine(Common::StringMap &settings, int argc, const cha
 			END_OPTION
 
 			DO_LONG_OPTION("eob-sound-trace")
+			END_OPTION
+
+			DO_LONG_OPTION("eob-sound-render")
 			END_OPTION
 
 unknownOption:

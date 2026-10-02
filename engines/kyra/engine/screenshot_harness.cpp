@@ -36,6 +36,7 @@
 
 #include <stdlib.h>
 
+#include "audio/fmopl.h"
 #include "common/config-manager.h"
 #include "common/crc.h"
 #include "common/file.h"
@@ -54,6 +55,8 @@
 #include "kyra/graphics/screen.h"
 #include "kyra/script/script_eob.h"
 #include "kyra/sound/sound.h"
+#include "kyra/sound/sound_pc_v1.h"
+#include "kyra/sound/drivers/pc_base.h"
 
 namespace Kyra {
 
@@ -71,7 +74,7 @@ bool ScreenshotHarness::isEnabled() {
 	return haveSetting("screenshot") || haveSetting("eob_dump_state")
 		|| haveSetting("eob_batch") || haveSetting("eob_fire_triggers")
 		|| haveSetting("eob_play_sequence") || haveSetting("eob_sequence_prefix")
-		|| haveSetting("eob_sound_trace");
+		|| haveSetting("eob_sound_trace") || haveSetting("eob_sound_render");
 }
 
 // Scripted dialogue answers, consumed in order by runDialogue. A headless
@@ -580,11 +583,27 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	const bool haveBatch = haveSetting("eob_batch");
 	const bool haveTrig = haveSetting("eob_fire_triggers");
 	const bool havePlay = haveSetting("eob_play_sequence");
+	const bool haveRender = haveSetting("eob_sound_render");
 
-	if (!haveShot && !haveDump && !haveBatch && !haveTrig && !havePlay) {
+	if (!haveShot && !haveDump && !haveBatch && !haveTrig && !havePlay && !haveRender) {
 		err = "one of --screenshot=PATH, --eob-dump-state=PATH, --eob-fire-triggers=PATH, "
-			"--eob-batch=FILE or --eob-play-sequence=intro|finale is required";
+			"--eob-batch=FILE, --eob-play-sequence=intro|finale or --eob-sound-render=SCRIPT "
+			"is required";
 		return false;
+	}
+	// A sound render drives a driver of its own and touches no level, so
+	// it stands alone like a sequence play: every other mode would either
+	// write nothing (it exits before the bootstrap) or record a run whose
+	// sound the render's driver never hears.
+	if (haveRender) {
+		if (haveShot || haveDump || haveBatch || haveTrig || havePlay
+				|| haveSetting("eob_sequence_prefix") || haveSetting("eob_sound_trace")) {
+			err = "--eob-sound-render cannot be combined with --screenshot, --eob-dump-state, "
+				"--eob-fire-triggers, --eob-batch, --eob-play-sequence, --eob-sequence-prefix "
+				"or --eob-sound-trace";
+			return false;
+		}
+		out.soundRenderPath = Common::Path::fromCommandLine(ConfMan.get("eob_sound_render"));
 	}
 	// A sequence play leaves the engine wherever the sequence left it and
 	// exits, so it stands alone, and it produces nothing but captures, so
@@ -680,8 +699,9 @@ bool ScreenshotHarness::parseSettings(Settings &out, Common::String &err) {
 	// on its own lines, so the command line does not have to. A state dump
 	// needs a level but no viewpoint, because a snapshot describes the
 	// whole level rather than what the party can see.
-	// A sequence play draws no level, so it needs none either.
-	const bool needLevel = !haveBatch && !havePlay;
+	// A sequence play draws no level, so it needs none either, and nor
+	// does a sound render.
+	const bool needLevel = !haveBatch && !havePlay && !haveRender;
 	const bool needPosition = haveShot && !haveBatch;
 
 	// Save slot is optional. ScummVM's standard --save-slot=N (alias -x N)
@@ -1557,6 +1577,465 @@ bool ScreenshotHarness::runBatch(EoBCoreEngine *vm, const Common::Path &path,
 	return ok;
 }
 
+// Sound renders (--eob-sound-render). Each render builds a SoundPC_v1 of
+// the harness's own whose AdLibDriver writes to the recording chip below
+// and is ticked by the harness, one callback per tick, so the log is every
+// register write the reference's driver makes for a scripted sequence of
+// front-end calls, stamped with the callback it happened in. The engine's
+// own driver is not used: under --music-driver=null it is the PC speaker
+// driver, which creates no chip, so the recording chip is the only one.
+static Common::WriteStream *g_oplOut = nullptr;
+static uint32 g_oplTick = 0;
+static uint32 g_oplWrites = 0;
+static bool g_oplArmed = false;
+
+// Tracks a version-2 sound file maps, and the volumes the driver takes.
+static const int kSoundRenderTracks = 120;
+static const uint32 kSoundRenderMaxBudget = 100000000;
+
+/**
+ * An OPL chip that records instead of sounding: every register write
+ * becomes one `<tick> <reg> <val>` line of the render's output. It has no
+ * timer, because the harness ticks the driver itself.
+ */
+class RecordingOpl : public ::OPL::OPL {
+public:
+	bool init() override { return true; }
+	void reset() override {}
+	void write(int a, int v) override {}
+	void writeReg(int r, int v) override {
+		if (!g_oplOut)
+			return;
+		g_oplOut->writeString(Common::String::format("%u %02x %02x\n",
+			g_oplTick, (uint)(r & 0xFF), (uint)(v & 0xFF)));
+		++g_oplWrites;
+	}
+	void setCallbackFrequency(int timerFrequency) override {}
+
+protected:
+	void startCallbacks(int timerFrequency) override {}
+	void stopCallbacks() override {}
+};
+
+::OPL::OPL *ScreenshotHarness::takeOplRenderChip() {
+	if (!g_oplArmed)
+		return nullptr;
+	g_oplArmed = false;
+	return new RecordingOpl();
+}
+
+/** One `<tick>:<command>` of a render line. */
+struct SoundRenderEvent {
+	enum Kind {
+		kNone,
+		kFile,
+		kSong,
+		kSfx,
+		kHalt,
+		kFade
+	};
+
+	SoundRenderEvent() : tick(0), kind(kNone), track(0), volume(0xFF) {}
+
+	uint32 tick;
+	Kind kind;
+	Common::String stem;
+	int track;
+	int volume;
+};
+
+/** One line of a sound render script, one output file. */
+struct SoundRenderLine {
+	SoundRenderLine() : tracks(false), budget(0), volume(0xFF), lineNo(0) {}
+
+	bool tracks;
+	Common::String outPath;
+	Common::String stem;
+	uint32 budget;
+	int volume;
+	Common::Array<SoundRenderEvent> events;
+	int lineNo;
+};
+
+// A non-empty run of decimal digits no greater than @p max.
+static bool parseSoundNumber(const Common::String &raw, uint32 max, uint32 &out) {
+	if (raw.empty() || raw.size() > 9)
+		return false;
+	for (uint i = 0; i < raw.size(); ++i) {
+		if (!Common::isDigit(raw[i]))
+			return false;
+	}
+	out = (uint32)atoi(raw.c_str());
+	return out <= max;
+}
+
+static bool soundFileExists(EoBCoreEngine *vm, const Common::String &stem) {
+	// Spelled as SoundPC_v1::internalLoadFile spells it, so the resource
+	// manager's case-insensitive lookup decides as it will in the render.
+	Common::Path path(stem);
+	path.appendInPlace(".ADL");
+	return vm->resource()->exists(path);
+}
+
+// Split @p raw on ':'.
+static void splitSoundEvent(const Common::String &raw, Common::Array<Common::String> &out) {
+	out.clear();
+	Common::String field;
+	for (uint i = 0; i < raw.size(); ++i) {
+		if (raw[i] == ':') {
+			out.push_back(field);
+			field.clear();
+		} else {
+			field += raw[i];
+		}
+	}
+	out.push_back(field);
+}
+
+// Parse one `<tick>:<command>` into @p ev. @returns false and sets @p err.
+static bool parseSoundEvent(EoBCoreEngine *vm, const Common::String &raw, SoundRenderEvent &ev,
+		Common::String &err) {
+	Common::Array<Common::String> f;
+	splitSoundEvent(raw, f);
+	if (f.size() < 2 || !parseSoundNumber(f[0], kSoundRenderMaxBudget, ev.tick)) {
+		err = Common::String::format("event '%s' invalid (expected <tick>:<command>)", raw.c_str());
+		return false;
+	}
+	const Common::String &cmd = f[1];
+	uint32 n = 0;
+	if (cmd == "file") {
+		if (f.size() != 3 || f[2].empty()) {
+			err = Common::String::format("event '%s' invalid (expected <tick>:file:<STEM>)", raw.c_str());
+			return false;
+		}
+		if (!soundFileExists(vm, f[2])) {
+			err = Common::String::format("event '%s': no sound file %s.ADL in the data directory",
+				raw.c_str(), f[2].c_str());
+			return false;
+		}
+		ev.kind = SoundRenderEvent::kFile;
+		ev.stem = f[2];
+	} else if (cmd == "song" || cmd == "sfx") {
+		const bool sfx = cmd == "sfx";
+		if (f.size() < 3 || f.size() > (sfx ? 4u : 3u)) {
+			err = Common::String::format("event '%s' invalid (expected <tick>:%s)", raw.c_str(),
+				sfx ? "sfx:<track>[:<volume>]" : "song:<track>");
+			return false;
+		}
+		if (!parseSoundNumber(f[2], kSoundRenderTracks - 1, n)) {
+			err = Common::String::format("event '%s': track '%s' out of range (0-%d)", raw.c_str(),
+				f[2].c_str(), kSoundRenderTracks - 1);
+			return false;
+		}
+		ev.track = (int)n;
+		if (f.size() == 4) {
+			if (!parseSoundNumber(f[3], 255, n)) {
+				err = Common::String::format("event '%s': volume '%s' out of range (0-255)", raw.c_str(),
+					f[3].c_str());
+				return false;
+			}
+			ev.volume = (int)n;
+		}
+		ev.kind = sfx ? SoundRenderEvent::kSfx : SoundRenderEvent::kSong;
+	} else if (cmd == "halt" || cmd == "fade") {
+		if (f.size() != 2) {
+			err = Common::String::format("event '%s' invalid (%s takes no argument)", raw.c_str(), cmd.c_str());
+			return false;
+		}
+		ev.kind = cmd == "halt" ? SoundRenderEvent::kHalt : SoundRenderEvent::kFade;
+	} else {
+		err = Common::String::format("event '%s': unknown command '%s' "
+			"(expected file, song, sfx, halt or fade)", raw.c_str(), cmd.c_str());
+		return false;
+	}
+	return true;
+}
+
+bool ScreenshotHarness::parseSoundScript(EoBCoreEngine *vm, const Common::Path &path,
+		Common::Array<SoundRenderLine> &out, Common::String &err) {
+	Common::FSNode node(path);
+	Common::SeekableReadStream *in = node.createReadStream();
+	if (!in) {
+		err = Common::String::format("cannot read sound render script '%s'",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		return false;
+	}
+
+	int lineNo = 0;
+	bool ok = true;
+	while (ok && !in->eos()) {
+		Common::String text = in->readLine();
+		++lineNo;
+		text.trim();
+		if (text.empty() || text[0] == '#')
+			continue;
+
+		Common::Array<Common::String> tok;
+		Common::StringTokenizer t(text, " \t");
+		while (!t.empty()) {
+			Common::String w = t.nextToken();
+			if (!w.empty())
+				tok.push_back(w);
+		}
+
+		SoundRenderLine line;
+		line.lineNo = lineNo;
+		Common::String why;
+		if (tok[0] == "tracks") {
+			uint32 n = 0;
+			line.tracks = true;
+			if (tok.size() < 4 || tok.size() > 5) {
+				why = "'tracks' needs <outpath> <STEM> <budget> [<volume>]";
+			} else if (!parseSoundNumber(tok[3], kSoundRenderMaxBudget, line.budget) || !line.budget) {
+				why = Common::String::format("budget '%s' invalid (expected a positive decimal tick count)",
+					tok[3].c_str());
+			} else if (tok.size() == 5 && !parseSoundNumber(tok[4], 255, n)) {
+				why = Common::String::format("volume '%s' out of range (0-255)", tok[4].c_str());
+			} else if (!soundFileExists(vm, tok[2])) {
+				why = Common::String::format("no sound file %s.ADL in the data directory", tok[2].c_str());
+			} else {
+				line.outPath = tok[1];
+				line.stem = tok[2];
+				if (tok.size() == 5)
+					line.volume = (int)n;
+			}
+		} else if (tok[0] == "render") {
+			if (tok.size() < 4) {
+				why = "'render' needs <outpath> <budget> <tick>:<command> [<tick>:<command> ...]";
+			} else if (!parseSoundNumber(tok[2], kSoundRenderMaxBudget, line.budget) || !line.budget) {
+				why = Common::String::format("budget '%s' invalid (expected a positive decimal tick count)",
+					tok[2].c_str());
+			} else {
+				line.outPath = tok[1];
+				for (uint i = 3; i < tok.size() && why.empty(); ++i) {
+					SoundRenderEvent ev;
+					if (!parseSoundEvent(vm, tok[i], ev, why))
+						break;
+					// Events at one tick run in script order, so a script
+					// listed out of order has no single meaning.
+					if (!line.events.empty() && ev.tick < line.events.back().tick)
+						why = Common::String::format("event '%s' runs before the event listed ahead of it",
+							tok[i].c_str());
+					else if (ev.tick > line.budget)
+						why = Common::String::format("event '%s' lies past the budget of %u ticks",
+							tok[i].c_str(), line.budget);
+					else
+						line.events.push_back(ev);
+				}
+			}
+		} else {
+			why = Common::String::format("unknown line kind '%s' (expected tracks or render)", tok[0].c_str());
+		}
+
+		for (uint i = 0; i < out.size() && why.empty(); ++i) {
+			if (out[i].outPath == line.outPath)
+				why = Common::String::format("output '%s' is already written by line %d",
+					line.outPath.c_str(), out[i].lineNo);
+		}
+
+		if (!why.empty()) {
+			err = Common::String::format("sound render script line %d: %s", lineNo, why.c_str());
+			ok = false;
+		} else {
+			out.push_back(line);
+		}
+	}
+	delete in;
+
+	if (ok && out.empty()) {
+		err = Common::String::format("sound render script '%s' renders nothing",
+			path.toString(Common::Path::kNativeSeparator).c_str());
+		ok = false;
+	}
+	return ok;
+}
+
+// Build a SoundPC_v1 whose AdLib driver writes to the recording chip.
+static SoundPC_v1 *createSoundRenderSound(EoBCoreEngine *vm) {
+	g_oplArmed = true;
+	SoundPC_v1 *snd = new SoundPC_v1(vm, g_system->getMixer(), Sound::kAdLib);
+	if (g_oplArmed) {
+		// The driver did not ask for a chip, so nothing would be recorded.
+		warning("Screenshot harness: the sound render's driver did not take the recording chip");
+		_exit(1);
+	}
+	return snd;
+}
+
+void ScreenshotHarness::listSoundTracks(EoBCoreEngine *vm, const Common::String &stem, int volume,
+		uint32 budget, Common::Array<Common::String> &headers, Common::Array<int> &tracks) {
+	headers.clear();
+	tracks.clear();
+
+	// A driver of its own with the file loaded, so that the table and the
+	// program lookup are the ones a render's play resolves through. Nothing
+	// is recorded: g_oplOut is null outside renderSound.
+	SoundPC_v1 *snd = createSoundRenderSound(vm);
+	snd->loadSoundFile(Common::Path(stem));
+	PCSoundDriver *drv = snd->_driver;
+
+	for (int t = 0; t < kSoundRenderTracks; ++t) {
+		const uint8 program = snd->_trackEntries[t];
+		if (program == 0xFF)
+			continue;
+		const uint8 *ptr = drv->getProgram(program);
+		// setupPrograms drops a program with fewer than its two header
+		// bytes (channel, priority), so such a track plays nothing.
+		if (!ptr || ptr + 2 > drv->_soundData + drv->_soundDataSize)
+			continue;
+		headers.push_back(Common::String::format(
+			"render file=%s.ADL track=%d program=%u channel=%u priority=%u volume=%d budget=%u",
+			stem.c_str(), t, (uint)program, (uint)ptr[0], (uint)ptr[1], volume, budget));
+		tracks.push_back(t);
+	}
+	delete snd;
+}
+
+void ScreenshotHarness::renderSound(EoBCoreEngine *vm, Common::WriteStream *out,
+		const Common::String &header, const Common::Array<SoundRenderEvent> &events, uint32 budget) {
+	out->writeString(header + "\n");
+
+	g_oplOut = out;
+	g_oplTick = 0;
+	g_oplWrites = 0;
+	SoundPC_v1 *snd = createSoundRenderSound(vm);
+	PCSoundDriver *drv = snd->_driver;
+
+	// What the engine does at startup, less the volume: the volume is the
+	// original driver's arithmetic (255), not ScummVM's music_volume.
+	out->writeString("0 cmd init\n");
+	snd->init();
+	out->writeString("0 cmd volume 255\n");
+	drv->setMusicVolume(255);
+	drv->setSfxVolume(255);
+
+	uint next = 0;
+	bool playing[10] = { false, false, false, false, false, false, false, false, false, false };
+	int trigger = 0;
+	uint32 tick = 0;
+	bool idle = false;
+
+	for (;;) {
+		// The events at this tick, in script order: after callback `tick`
+		// and before callback `tick + 1`, tick 0 before the first.
+		for (; next < events.size() && events[next].tick == tick; ++next) {
+			const SoundRenderEvent &ev = events[next];
+			switch (ev.kind) {
+			case SoundRenderEvent::kFile:
+				out->writeString(Common::String::format("%u cmd file %s\n", tick, ev.stem.c_str()));
+				snd->loadSoundFile(Common::Path(ev.stem));
+				break;
+			case SoundRenderEvent::kSong:
+				out->writeString(Common::String::format("%u cmd song %d\n", tick, ev.track));
+				snd->playTrack((uint8)ev.track);
+				break;
+			case SoundRenderEvent::kSfx:
+				out->writeString(Common::String::format("%u cmd sfx %d %d\n", tick, ev.track, ev.volume));
+				snd->playSoundEffect((uint16)ev.track, (uint8)ev.volume);
+				break;
+			case SoundRenderEvent::kHalt:
+				out->writeString(Common::String::format("%u cmd halt\n", tick));
+				snd->haltTrack();
+				break;
+			case SoundRenderEvent::kFade:
+				out->writeString(Common::String::format("%u cmd fade\n", tick));
+				snd->beginFadeOut();
+				break;
+			default:
+				break;
+			}
+		}
+
+		if (tick > 0 && !drv->harnessBusy() && next == events.size()) {
+			idle = true;
+			break;
+		}
+		if (tick >= budget)
+			break;
+
+		++tick;
+		g_oplTick = tick;
+		drv->harnessTick();
+
+		// Polled from the driver's public state, so a port can reproduce
+		// them from its own: channels in ascending order, then the trigger.
+		for (int c = 0; c < 10; ++c) {
+			const bool on = drv->isChannelPlaying(c);
+			if (on != playing[c]) {
+				out->writeString(Common::String::format("%u chan %d %s\n", tick, c, on ? "on" : "off"));
+				playing[c] = on;
+			}
+		}
+		const int now = drv->getSoundTrigger();
+		if (now != trigger) {
+			out->writeString(Common::String::format("%u trigger %d\n", tick, now));
+			trigger = now;
+		}
+	}
+
+	out->writeString(Common::String::format("end tick=%u %s writes=%u\n", tick,
+		idle ? "idle" : "budget", g_oplWrites));
+	delete snd;
+	g_oplOut = nullptr;
+}
+
+bool ScreenshotHarness::runSoundRender(EoBCoreEngine *vm, const Common::Path &path, Common::String &err) {
+	Common::Array<SoundRenderLine> lines;
+	if (!parseSoundScript(vm, path, lines, err))
+		return false;
+
+	uint renders = 0;
+	for (uint i = 0; i < lines.size(); ++i) {
+		const SoundRenderLine &line = lines[i];
+		const Common::Path outPath = Common::Path::fromCommandLine(line.outPath);
+		Common::DumpFile *out = new Common::DumpFile();
+		if (!out->open(outPath)) {
+			delete out;
+			err = Common::String::format("sound render script line %d: cannot open '%s' for writing",
+				line.lineNo, line.outPath.c_str());
+			return false;
+		}
+		out->writeString("# eob2-opl v1\n");
+
+		if (line.tracks) {
+			Common::Array<Common::String> headers;
+			Common::Array<int> tracks;
+			listSoundTracks(vm, line.stem, line.volume, line.budget, headers, tracks);
+			for (uint t = 0; t < tracks.size(); ++t) {
+				// A `tracks` render is `0:file:<STEM> 0:sfx:<t>:<volume>`.
+				Common::Array<SoundRenderEvent> events;
+				SoundRenderEvent ev;
+				ev.kind = SoundRenderEvent::kFile;
+				ev.stem = line.stem;
+				events.push_back(ev);
+				ev = SoundRenderEvent();
+				ev.kind = SoundRenderEvent::kSfx;
+				ev.track = tracks[t];
+				ev.volume = line.volume;
+				events.push_back(ev);
+				renderSound(vm, out, headers[t], events, line.budget);
+				++renders;
+			}
+		} else {
+			renderSound(vm, out, Common::String::format("render events=%u budget=%u",
+				line.events.size(), line.budget), line.events, line.budget);
+			++renders;
+		}
+
+		out->finalize();
+		const bool failed = out->err();
+		out->close();
+		delete out;
+		if (failed) {
+			err = Common::String::format("sound render script line %d: cannot write '%s'",
+				line.lineNo, line.outPath.c_str());
+			return false;
+		}
+	}
+	debug("Screenshot harness: rendered %u sound render(s) into %u file(s)", renders, lines.size());
+	return true;
+}
+
 void ScreenshotHarness::run(EoBCoreEngine *vm) {
 	Settings s;
 	Common::String err;
@@ -1572,6 +2051,23 @@ void ScreenshotHarness::run(EoBCoreEngine *vm) {
 		warning("Screenshot harness: target must be Eye of the Beholder II "
 			"(got gameID=%d)", vm->_flags.gameID);
 		_exit(1);
+	}
+
+	// A sound render needs the resource manager and nothing the bootstrap
+	// builds, so it runs and exits here. The engine's own driver must not
+	// be an AdLib one: OPL::OPL allows one chip at a time, and that
+	// driver's chip would already be the one.
+	if (!s.soundRenderPath.empty()) {
+		if (vm->sound()->getMusicType() == Sound::kAdLib) {
+			warning("Screenshot harness: --eob-sound-render needs --music-driver=null: "
+				"the engine's own AdLib driver holds the only OPL chip");
+			_exit(1);
+		}
+		if (!runSoundRender(vm, s.soundRenderPath, err)) {
+			warning("Screenshot harness: %s", err.c_str());
+			_exit(1);
+		}
+		_exit(0);
 	}
 
 	if (!s.sequencePrefix.empty() && !openSequenceCapture(s.sequencePrefix, err)) {

@@ -51,7 +51,20 @@ public:
 	// AdLiB (Kyra 1) specific
 	virtual void setSyncJumpMask(uint16) {}
 
+	// EOB2 reference harness (--eob-sound-render). harnessTick runs one
+	// driver callback on the caller's thread, and harnessBusy says whether
+	// a channel still plays or a program is still queued. Only the
+	// harness calls them, and only on a driver it built for a render, so
+	// they are inert in play; a driver the harness cannot render keeps
+	// these defaults.
+	virtual void harnessTick() {}
+	virtual bool harnessBusy() const { return false; }
+
 protected:
+	// The harness reads a loaded program's channel and priority bytes
+	// through getProgram for a render's header line.
+	friend class ScreenshotHarness;
+
 	uint8 *getProgram(int progId) {
 		// Safety check: invalid progId would crash.
 		if (progId < 0 || progId >= (int32)_soundDataSize / 2)

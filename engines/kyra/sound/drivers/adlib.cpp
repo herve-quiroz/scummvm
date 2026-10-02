@@ -42,6 +42,10 @@
 #include "audio/fmopl.h"
 #include "common/mutex.h"
 
+#ifdef ENABLE_EOB
+#include "kyra/engine/screenshot_harness.h"
+#endif
+
 #define CALLBACKS_PER_SECOND 72
 
 namespace Kyra {
@@ -60,6 +64,9 @@ public:
 	void resetSoundTrigger() override { _soundTrigger = 0; }
 
 	void callback();
+
+	void harnessTick() override { callback(); }
+	bool harnessBusy() const override;
 
 	void setSyncJumpMask(uint16 mask) override { _syncJumpMask = mask; }
 
@@ -323,7 +330,17 @@ AdLibDriver::AdLibDriver(Audio::Mixer *mixer, int version) : PCSoundDriver() {
 
 	_mixer = mixer;
 
+#ifdef ENABLE_EOB
+	// The EOB2 reference harness (--eob-sound-render) hands a driver it
+	// builds for a render a chip that records every register write, and
+	// ticks that driver itself; null everywhere else, so the engine's own
+	// driver and Kyra 1, Kyra 2 and Lands of Lore, which share this file,
+	// create their chip as before.
+	OPL::OPL *harnessChip = ScreenshotHarness::takeOplRenderChip();
+	_adlib = harnessChip ? harnessChip : OPL::Config::create();
+#else
 	_adlib = OPL::Config::create();
+#endif
 	if (!_adlib || !_adlib->init())
 		error("Failed to create OPL");
 
@@ -360,6 +377,12 @@ AdLibDriver::AdLibDriver(Audio::Mixer *mixer, int version) : PCSoundDriver() {
 	_programQueueStart = _programQueueEnd = 0;
 	_retrySounds = false;
 
+#ifdef ENABLE_EOB
+	// A render's driver is ticked by the harness through harnessTick, on
+	// the harness's own clock, so no timer or mixer thread may tick it too.
+	if (harnessChip)
+		return;
+#endif
 	_adlib->start(new Common::Functor0Mem<void, AdLibDriver>(this, &AdLibDriver::callback), CALLBACKS_PER_SECOND);
 }
 
@@ -484,6 +507,18 @@ void AdLibDriver::stopAllChannels() {
 	_programQueueStart = _programQueueEnd = 0;
 	_programQueue[0] = QueueEntry();
 	_programStartTimeout = 0;
+}
+
+bool AdLibDriver::harnessBusy() const {
+	Common::StackLock lock(_mutex);
+
+	for (int channel = 0; channel <= 9; ++channel) {
+		if (_channels[channel].dataptr)
+			return true;
+	}
+	// isChannelPlaying alone cannot see a program that is queued and not
+	// yet started, which is every track before the first callback.
+	return _programQueueStart != _programQueueEnd || _programQueue[_programQueueStart].data != nullptr;
 }
 
 // timer callback

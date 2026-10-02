@@ -75,6 +75,10 @@ public:
 	int checkTrigger() override;
 	void resetTrigger() override;
 private:
+	// The EOB2 reference harness (--eob-sound-render) drives a driver of
+	// its own through _driver and reads the loaded file's _trackEntries.
+	friend class ScreenshotHarness;
+
 	void internalLoadFile(const Common::Path &file);
 
 	void play(uint8 track, uint8 volume);
