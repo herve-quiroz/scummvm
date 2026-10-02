@@ -34,7 +34,7 @@ KYRA/EOB2 (Eye of the Beholder II target):
 
 `--extrapath` points at `dists/engine-data/` which ships `mm.dat` (the MM/Xeen engine-data file). Drop it if `mm.dat` is installed system-wide. The audio flags silence the engine; ScummVM does not expose `--music-mute` style flags as CLI options.
 
-The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot`, `--mm-scale-test`, `--mm-screenshot-prefix`, `--eob-dump-state`, `--eob-batch` or `--eob-fire-triggers` is on the command line, so no game window pops up regardless of whether a real X / Wayland display is present. `--eob-play-sequence` is not on that list, which keeps the shared `posix-main.cpp` untouched; its callers set `SDL_VIDEODRIVER=dummy` themselves. To pick a different driver (e.g. `offscreen`), set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var when none is provided.
+The harness auto-forces `SDL_VIDEODRIVER=dummy` when `--screenshot`, `--mm-scale-test`, `--mm-screenshot-prefix`, `--eob-dump-state`, `--eob-batch` or `--eob-fire-triggers` is on the command line, so no game window pops up regardless of whether a real X / Wayland display is present. `--eob-play-sequence` and `--eob-sound-render` are not on that list, which keeps the shared `posix-main.cpp` untouched; their callers set `SDL_VIDEODRIVER=dummy` themselves. To pick a different driver (e.g. `offscreen`), set `SDL_VIDEODRIVER=offscreen` explicitly; the harness only sets the env var when none is provided.
 
 ## Shared flags
 
@@ -78,9 +78,10 @@ The KYRA harness reuses ScummVM's stock `--save-slot` flag and adds its own `--e
 | `--eob-batch` | no | absolute filesystem path | Run many captures in one process. See "Batch mode" below. |
 | `--eob-sequence-prefix` | no | absolute filesystem path prefix | With `--eob-fire-triggers`, a batch `triggers` line or `--eob-play-sequence`: write `<prefix>.NNNN.png` at each capture point plus a sidecar `<prefix>.trace.txt`. Refused without one of those modes. See "Sequence captures" and "Sequence plays" below. |
 | `--eob-sound-trace` | no | absolute filesystem path | With `--eob-fire-triggers` and `--level` (both required): log every sound the reference asks for while the sweep runs, one line per request under the firing that made it. Refused with `--eob-batch`, which would put several levels' firings under one level header. Additive: it changes no other output. See "Sound traces" below. |
+| `--eob-sound-render` | no | absolute filesystem path | Render every line of a script through an AdLib driver of the harness's own, logging each OPL register write the reference's driver makes, then exit. Presence enables harness mode. Needs no `--level`, `--cell` or `--facing`. Refused with every other mode (`--screenshot`, `--eob-dump-state`, `--eob-fire-triggers`, `--eob-batch`, `--eob-play-sequence`, `--eob-sequence-prefix`, `--eob-sound-trace`) and with an AdLib music driver: run it under `--music-driver=null`. Not forced headless: set `SDL_VIDEODRIVER=dummy`. See "Sound renders" below. |
 | `--eob-play-sequence` | no | `intro` or `finale` | Play the reference's intro (`DarkMoonEngine::seq_playIntro`) or finale (`seq_playFinale`, credits included) from a fresh bootstrap on a virtual clock, photographing it through `--eob-sequence-prefix` (required), then exit. Presence enables harness mode. Needs no `--level`, `--cell` or `--facing`. Refused with `--screenshot`, `--eob-dump-state`, `--eob-fire-triggers` or `--eob-batch`. Not forced headless: set `SDL_VIDEODRIVER=dummy`. See "Sequence plays" below. |
 
-ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`, `eob_sound_trace`.
+ConfMan keys: `eob_dump_state`, `eob_fire_triggers`, `eob_dialog_answers`, `eob_hand_item`, `eob_batch`, `eob_sequence_prefix`, `eob_play_sequence`, `eob_sound_trace`, `eob_sound_render`.
 
 ### State snapshots
 
@@ -300,6 +301,147 @@ something in 13 of them, and two sweeps of the level write byte-identical traces
     --eob-fire-triggers=/tmp/L4.trig --eob-sound-trace=/tmp/L4.snd \
     --level=4 eob2
 ```
+
+### Sound renders
+
+`--eob-sound-render=SCRIPT` logs every OPL register write the reference's Westwood AdLib
+driver (`Kyra::AdLibDriver`) makes for a scripted sequence of sound calls, tick by tick, so
+a port of the driver can be checked write for write. It drives no level and no party: it
+runs right after the engine hands over to the harness, before the bootstrap, and exits.
+
+```bash
+SDL_VIDEODRIVER=dummy ./scummvm --path="/path/to/EOB2/" \
+    --extrapath="$PWD/dists/engine-data" \
+    --music-driver=null -m 0 -s 0 -r 0 \
+    --eob-sound-render=/tmp/renders.script eob2
+```
+
+#### The script
+
+Each line of SCRIPT that is not empty and does not start with `#` writes one output file:
+
+```
+tracks <outpath> <STEM> <budget> [<volume>]
+render <outpath> <budget> <tick>:<command> [<tick>:<command> ...]
+```
+
+* **`tracks`** renders every track `t` in 0..119 of `<STEM>.ADL` whose table entry is not
+  `0xFF` and whose program resolves (`PCSoundDriver::getProgram` non-null, with its channel
+  and priority bytes inside the data), one render each, from a fresh driver, as
+  `0:file:<STEM> 0:sfx:<t>:<volume>`. `<volume>` defaults to 255.
+* **`render`** runs one scripted render of the events it lists.
+* `<budget>` is a positive decimal number of driver callbacks (ticks; the driver runs 72 a
+  second). 43200, ten minutes, is enough for every track in the DOS data.
+
+| Command | Calls |
+|---------|-------|
+| `file:<STEM>` | `SoundPC_v1::loadSoundFile(Common::Path(STEM))`, which appends `.ADL` and loads through the resource manager, case-insensitively |
+| `song:<track>` | `SoundPC_v1::playTrack(track)` |
+| `sfx:<track>[:<volume>]` | `SoundPC_v1::playSoundEffect(track, volume)`, volume 255 by default |
+| `halt` | `SoundPC_v1::haltTrack()` |
+| `fade` | `SoundPC_v1::beginFadeOut()` |
+
+An event at tick `t` runs after callback `t` and before callback `t+1`; tick 0 runs before
+the first callback. Events at one tick run in script order. A track is 0..119 and a volume
+0..255.
+
+The whole script is read and checked before anything is written, and the run exits 1 with a
+message, writing nothing, for: a line of another kind or with the wrong number of fields; a
+budget that is not a positive decimal; a `<STEM>.ADL` the data directory does not hold; an
+event that is not `<tick>:<command>`, or names an unknown command, a track outside 0..119 or
+a volume outside 0..255; events whose ticks decrease; an event past the budget; two lines
+writing the same output; and a script with no line at all.
+
+#### The log
+
+```
+# eob2-opl v1
+render file=FOREST.ADL track=55 program=121 channel=9 priority=4 volume=255 budget=43200
+0 cmd init
+0 01 20
+...
+0 cmd volume 255
+0 40 00
+...
+0 cmd file FOREST
+0 b0 00
+...
+0 cmd sfx 55 255
+1 bd 00
+...
+1 chan 0 on
+...
+123 chan 3 off
+end tick=123 idle writes=168
+```
+
+* Each output file starts with `# eob2-opl v1`; a `tracks` file then holds one render per
+  track, in track order, and a `render` file one render.
+* A render starts with its header: `render file=<STEM>.ADL track=<t> program=<p>
+  channel=<c> priority=<q> volume=<v> budget=<b>` for a `tracks` render, the program
+  `_trackEntries[t]` and the program's first two bytes, its channel and priority, as the
+  file holds them (`<STEM>` spelled as the script spells it); `render events=<n>
+  budget=<b>` for a scripted render, whose `cmd` lines say the rest.
+* `<tick> <reg> <val>` is one write, the tick in decimal and the register and value as two
+  lowercase hex digits each. The recording chip writes it from `OPL::writeReg`, so it is
+  every byte the driver sends the chip, in order.
+* `<tick> cmd <text>` is written before each front-end call the render makes, so every write
+  follows the call that caused it. At tick 0 every render first writes `cmd init`
+  (`SoundPC_v1::init`, the driver's `resetAdLibState`: 21 writes) and `cmd volume 255` (the
+  driver's `setMusicVolume(255)` and `setSfxVolume(255)`: 18 writes), then the events:
+  `cmd file <STEM>`, `cmd song <t>`, `cmd sfx <t> <v>`, `cmd halt`, `cmd fade`.
+* `<tick> chan <c> on|off` and `<tick> trigger <n>` are polled after each callback from the
+  driver's public state (`isChannelPlaying`, `getSoundTrigger`), written when they change
+  (every channel starts off and the trigger at 0), channels 0 to 9 in ascending order and then
+  the trigger. They come after that callback's writes and before that tick's events. A
+  channel a front-end call stops shows off at the next callback's poll.
+* `end tick=<k> idle|budget writes=<w>` closes the render; `<w>` counts its writes, tick 0's
+  included.
+
+#### The end rule
+
+After each callback and the events of its tick, the render ends `idle` when no channel 0 to 9
+has a program and the program queue is empty (`PCSoundDriver::harnessBusy`) and no event is
+left; otherwise it ends `budget` once it has run `<budget>` callbacks. The idle test needs the
+queue as well as the channels, because a track that is queued and not yet started plays on no
+channel, which is every track at tick 0. A render always runs at least one callback.
+
+#### Volume 255
+
+The render calls the driver's `setMusicVolume(255)` directly and never
+`SoundPC_v1::updateVolumeSettings`, so `-m` and ConfMan's `music_volume` do not reach it.
+`volumeModifier` is a ScummVM addition, and at 255 its term in `calculateOpLevel1` and
+`calculateOpLevel2` leaves every 6-bit level as the original's plain sum, so the log is the
+original driver's arithmetic. The `cmd volume 255` group is itself ScummVM's (it rewrites the
+total levels `init` set to `3f`); a consumer modelling the original can drop it by its `cmd`
+line.
+
+#### The driver
+
+Each render, and each `tracks` line's listing of its tracks, builds a fresh
+`SoundPC_v1(vm, mixer, Sound::kAdLib)` of the harness's own and deletes it afterwards, so no
+state (`adjustSfxData`'s rewritten bytes, the random generator, `_retrySounds`) carries from
+one render to the next. While the harness builds it, `ScreenshotHarness::takeOplRenderChip`
+hands `AdLibDriver`'s constructor a recording chip in place of `OPL::Config::create()`, and the
+constructor skips `_adlib->start`: no timer and no mixer thread tick the driver, the harness
+does, calling `AdLibDriver::callback` through `PCSoundDriver::harnessTick`. At any other time
+`takeOplRenderChip` returns null, so the engine's own driver and Kyra 1, Kyra 2 and Lands of
+Lore, which share `adlib.cpp`, are untouched.
+
+The engine's own sound must not be AdLib, because `OPL::OPL()` allows one chip at a time and
+the engine's AdLib driver would already hold it. Under `--music-driver=null`, EOB2 builds
+`Sound::kPCjr`, whose PC speaker driver creates no chip. The render is refused with a message
+naming `--music-driver=null` whenever `vm->sound()->getMusicType()` is `Sound::kAdLib`.
+`--opl-driver` does not matter: no emulator is created.
+
+Each output is written through a `Common::DumpFile` and closed before the next line starts, so
+a run that dies leaves the outputs already finished and the current one's bytes in its
+`.tmp` sidecar.
+
+Measured on the DOS English data: the ten `.ADL` files at budget 43200 make 768 renders and
+162,437 writes in about one second of wall time; every render ends `idle` but `AZURE.ADL`
+track 58 (program 131 sets the tempo to 0 and never advances), which ends `budget`. Two runs
+write byte-identical logs.
 
 ### Sequence captures
 
@@ -526,7 +668,7 @@ The KYRA harness refuses to run on anything other than EOB2 (`gameID == GI_EOB2`
 
 ## Headless behavior
 
-The harness is fully headless. No window pops up under any video driver because `posix-main.cpp` forces `SDL_VIDEODRIVER=dummy` (when none is set) before SDL initialises, for the flags listed under "Invocation"; a sequence play (`--eob-play-sequence`) relies on its caller setting it. Palette and surface data are read from each engine's own state instead of from the SDL backend, so the captured PNG is correct even under `dummy` and `offscreen` drivers (which return an empty palette via `getPaletteManager()->grabPalette()`).
+The harness is fully headless. No window pops up under any video driver because `posix-main.cpp` forces `SDL_VIDEODRIVER=dummy` (when none is set) before SDL initialises, for the flags listed under "Invocation"; a sequence play (`--eob-play-sequence`) and a sound render (`--eob-sound-render`) rely on their caller setting it. Palette and surface data are read from each engine's own state instead of from the SDL backend, so the captured PNG is correct even under `dummy` and `offscreen` drivers (which return an empty palette via `getPaletteManager()->grabPalette()`).
 
 No autosave is written. No prompts are emitted. Failure paths exit fast (no waiting for a user to dismiss the modal error dialog ScummVM normally shows).
 
@@ -615,6 +757,7 @@ sweep is reproducible on any installation.
 * Friend declarations for engine state access: `engines/kyra/engine/eobcommon.h`, `engines/kyra/engine/kyra_rpg.h`.
 * Sequence capture points (`--eob-sequence-prefix`): `engines/kyra/engine/eobcommon.cpp` (`EoBCoreEngine::drawSequenceBitmap` and `EoBCoreEngine::delay`) and `engines/kyra/text/text_rpg.cpp` (`TextDisplayer_rpg::printDialogueText`, the numbered-page overload); CLI option in `base/commandLine.cpp`.
 * Sound traces (`--eob-sound-trace`): `ScreenshotHarness::openSoundTrace`, `closeSoundTrace` and the `log*` points in `engines/kyra/engine/screenshot_harness.cpp`; the hooks in `engines/kyra/script/script_eob.cpp` (`EoBInfProcessor::oeob_playSoundEffect`), `engines/kyra/engine/eobcommon.cpp` (`snd_playSong`, `snd_playSoundEffect`, `snd_stopSound`, `snd_fadeOut`), `engines/kyra/engine/kyra_rpg.cpp` (`snd_processEnvironmentalSoundEffect`, under `#ifdef ENABLE_EOB` as `delayUntil` is) and `engines/kyra/sound/sound_pc_v1.cpp` (`internalLoadFile`, under the same guard, since that file is built for every Kyra game); the firing's block and invocation reach the hooks through `beginSequenceCapture`; CLI option in `base/commandLine.cpp`.
+* Sound renders (`--eob-sound-render`): `ScreenshotHarness::runSoundRender`, `parseSoundScript`, `listSoundTracks`, `renderSound`, the `RecordingOpl` chip and `takeOplRenderChip` in `engines/kyra/engine/screenshot_harness.cpp`; the hooks `harnessTick` and `harnessBusy` on `PCSoundDriver` (`engines/kyra/sound/drivers/pc_base.h`, beside `friend class ScreenshotHarness` for `getProgram`), their `AdLibDriver` overrides and the constructor's chip choice and skipped `start` in `engines/kyra/sound/drivers/adlib.cpp` (under `#ifdef ENABLE_EOB`, since that file is built for every Kyra game); `friend class ScreenshotHarness` on `SoundPC_v1` (`engines/kyra/sound/sound_pc_v1.h`, for `_driver` and `_trackEntries`); CLI option in `base/commandLine.cpp`.
 * Sequence plays (`--eob-play-sequence`): `ScreenshotHarness::playSequence`, the virtual clock and the `capturePlay*` points in `engines/kyra/engine/screenshot_harness.cpp`; the capture calls and clock reads in `engines/kyra/sequence/sequences_darkmoon.cpp` (`DarkmoonSequenceHelper`, `seq_playIntro`, `seq_playFinale`, `seq_playCredits`); the clock read in `KyraRpgEngine::delayUntil` (`engines/kyra/engine/kyra_rpg.cpp`) and its advance in `EoBCoreEngine::delay`; `friend class ScreenshotHarness` on `Screen` (`engines/kyra/graphics/screen.h`, for `_screenPalette`) and on `DarkMoonEngine` (`engines/kyra/engine/darkmoon.h`, for `seq_playIntro`); CLI option in `base/commandLine.cpp`.
 
 ## Modifying the harness
